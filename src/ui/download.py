@@ -76,7 +76,7 @@ async def run_download(page, lec, course) -> bool:
     Returns:
         True: 정상 완료 / False: 오류
     """
-    from src.downloader.video_downloader import extract_video_url, download_video, make_filename
+    from src.downloader.video_downloader import extract_video_url, download_video_with_browser, make_filename
 
     console.print()
     console.print(Panel(
@@ -95,6 +95,7 @@ async def run_download(page, lec, course) -> bool:
     if not video_url:
         console.print("  [bold red]오류:[/bold red] 영상 URL을 찾지 못했습니다.")
         return False
+
 
     # 2. 파일 경로 결정
     filename = make_filename(course.long_name, lec.title)
@@ -121,7 +122,7 @@ async def run_download(page, lec, course) -> bool:
             def on_progress(downloaded: int, total: int):
                 progress.update(task_id, completed=downloaded, total=total)
 
-            download_video(video_url, save_path, on_progress=on_progress)
+            await download_video_with_browser(page, video_url, save_path, on_progress=on_progress)
         success = True
     except Exception as e:
         console.print(f"  [bold red]다운로드 실패:[/bold red] {e}")

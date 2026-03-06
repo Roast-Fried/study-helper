@@ -49,9 +49,11 @@ def _default_download_dir() -> str:
     """OS별 기본 다운로드 경로를 반환한다."""
     if sys.platform == "win32":
         return str(Path.home() / "Downloads")
-    else:
-        # macOS / Linux
-        return str(Path.home() / "Downloads")
+    # Docker 컨테이너 환경: /data 볼륨이 마운트된 경우 사용
+    if Path("/data").exists() and str(Path.home()) == "/root":
+        return "/data/downloads"
+    # macOS / 일반 Linux
+    return str(Path.home() / "Downloads")
 
 
 class Config:
