@@ -243,6 +243,7 @@ async def download_video_with_browser(
         response = await page.request.get(
             try_url,
             headers={"Referer": referer},
+            timeout=0,  # 타임아웃 비활성화 (대용량 파일 대응)
         )
         last_status = response.status
         # print(f"  [DBG] 응답 상태: {last_status}")
