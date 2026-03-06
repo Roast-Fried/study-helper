@@ -3,11 +3,46 @@ import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
-from src.crypto import decrypt, encrypt
+from src.crypto import decrypt, encrypt, is_encrypted  # noqa: F401 (encrypt used in save_credentials)
 
 # .env 파일 로드 (없으면 환경변수만 사용)
 _env_path = Path(__file__).parent.parent / ".env"
 load_dotenv(_env_path)
+
+
+def _load_credential(env_key: str) -> str:
+    """
+    환경변수를 읽어 복호화한다.
+    enc: 접두사가 있는데 복호화 실패 시(키 불일치) .env의 해당 키를 비워 재입력을 유도한다.
+    """
+    raw = os.getenv(env_key, "")
+    if not raw:
+        return ""
+    if is_encrypted(raw):
+        result = decrypt(raw)
+        if not result:
+            # 복호화 실패 → .env에서 해당 키 초기화
+            _clear_env_key(env_key)
+        return result
+    return raw
+
+
+def _clear_env_key(env_key: str) -> None:
+    """복호화 실패한 키를 .env에서 비운다."""
+    try:
+        lines = _env_path.read_text(encoding="utf-8").splitlines(keepends=True)
+        new_lines = []
+        for line in lines:
+            stripped = line.strip()
+            if "=" in stripped and not stripped.startswith("#"):
+                key = stripped.split("=", 1)[0].strip()
+                if key == env_key:
+                    new_lines.append(f"{key}=\n")
+                    continue
+            new_lines.append(line)
+        _env_path.write_text("".join(new_lines), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def _default_download_dir() -> str:
@@ -20,8 +55,8 @@ def _default_download_dir() -> str:
 
 
 class Config:
-    LMS_USER_ID: str = decrypt(os.getenv("LMS_USER_ID", ""))
-    LMS_PASSWORD: str = decrypt(os.getenv("LMS_PASSWORD", ""))
+    LMS_USER_ID: str = _load_credential("LMS_USER_ID")
+    LMS_PASSWORD: str = _load_credential("LMS_PASSWORD")
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     WHISPER_MODEL: str = os.getenv("WHISPER_MODEL", "base")
