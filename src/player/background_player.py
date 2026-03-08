@@ -13,6 +13,8 @@ LMS가 수강 완료로 인식하도록 실제 재생 시간을 유지한다.
 """
 
 import asyncio
+import json
+import math
 from dataclasses import dataclass
 from typing import Callable, Optional
 from urllib.parse import urlparse, parse_qs, unquote
@@ -154,11 +156,15 @@ async def _create_fake_webm(duration_sec: float) -> bytes:
 
     with tempfile.TemporaryDirectory() as tmpdir:
         output_path = os.path.join(tmpdir, "fake.webm")
+        dur = str(int(duration_sec) + 2)
         proc = await asyncio.create_subprocess_exec(
             "ffmpeg", "-y",
             "-f", "lavfi", "-i", "color=black:s=2x2:r=1",
-            "-t", str(int(duration_sec) + 2),
-            "-c:v", "libvpx", "-b:v", "0", "-crf", "10", "-an",
+            "-f", "lavfi", "-i", "anullsrc=r=8000:cl=mono",
+            "-t", dur,
+            "-c:v", "libvpx", "-b:v", "1k",
+            "-c:a", "libopus", "-b:a", "8k",
+            "-map", "0:v", "-map", "1:a",
             output_path,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
@@ -228,6 +234,100 @@ async def _call_progress_jsonp(frame: Frame, report_url: str, callback: str) -> 
         })
     """, [report_url, callback])
     return result
+
+
+async def _report_completion(
+    page: Page,
+    player_url: str,
+    duration: float,
+    log: Callable,
+):
+    """
+    Plan A 완료 후 progress API에 100% 진도를 한 번 직접 보고한다.
+
+    플레이어 JS(uni-player-event.js)가 가짜 WebM 재생 중 progress API를 호출하지
+    않는 경우를 대비한 안전망. Plan A가 성공하더라도 항상 호출한다.
+
+    ErrAlreadyInView 처리:
+    - sl=1 세션이 활성 상태(commons iframe 로드 중)이면 ErrAlreadyInView가 반환됨.
+    - 이 경우 대시보드로 이동해 sl=1 세션을 종료한 뒤 page.request.get으로 재시도.
+    """
+    import time
+
+    info = _parse_player_url(player_url)
+    progress_url = info["progress_url"]
+    if not progress_url:
+        log("  [완료 보고] TargetUrl 없음 — 건너뜀")
+        return
+
+    if duration <= 0:
+        duration = info["duration"]
+    if duration <= 0:
+        log("  [완료 보고] duration 불명 — 건너뜀")
+        return
+
+    total_page = 15
+    sep = "&" if "?" in progress_url else "?"
+
+    def _build_url() -> tuple[str, str]:
+        ts = int(time.time() * 1000)
+        cb = f"jQuery111_{ts}"
+        url = (
+            f"{progress_url}{sep}"
+            f"callback={cb}"
+            f"&state=3"
+            f"&duration={duration}"
+            f"&currentTime={duration:.2f}"
+            f"&cumulativeTime={duration:.2f}"
+            f"&page={total_page}"
+            f"&totalpage={total_page}"
+            f"&cumulativePage={total_page}"
+            f"&_={ts}"
+        )
+        return url, cb
+
+    log(f"  [완료 보고] 100% 진도 직접 전송 (duration={duration:.1f}s)")
+
+    # 1차: page 컨텍스트(canvas.ssu.ac.kr, 동일 오리진)에서 fetch — 쿠키 자동 포함
+    report_url, _ = _build_url()
+    try:
+        result = await page.evaluate(f"""
+            async () => {{
+                try {{
+                    const resp = await fetch({json.dumps(report_url)});
+                    return {{s: resp.status, b: (await resp.text()).slice(0, 300)}};
+                }} catch(e) {{
+                    return {{s: -1, b: e.message}};
+                }}
+            }}
+        """)
+        status = result.get("s")
+        body = result.get("b", "")
+        log(f"  [완료 보고] page ctx fetch: {status}  body={body!r}")
+        if status == 200:
+            return  # 성공
+        log(f"  [완료 보고] page ctx fetch 실패 ({status}) — 대시보드 이동 후 재시도")
+    except Exception as e:
+        log(f"  [완료 보고] page ctx fetch 오류: {e}")
+
+    # 2차: sl=1 세션 종료 후 page.request.get으로 재시도
+    try:
+        await page.goto("https://canvas.ssu.ac.kr/", wait_until="domcontentloaded", timeout=15000)
+        await asyncio.sleep(3)
+        log("  [완료 보고] 뷰 세션 종료 완료")
+    except Exception as e:
+        log(f"  [완료 보고] 대시보드 이동 실패 (무시): {e}")
+
+    report_url2, _ = _build_url()
+    try:
+        response = await page.request.get(
+            report_url2,
+            headers={"Referer": "https://commons.ssu.ac.kr/"},
+        )
+        body = await response.text()
+        log(f"  [완료 보고] 재시도 응답: {response.status}  body={body[:200]!r}")
+    except Exception as e:
+        log(f"  [완료 보고] 재시도 실패: {e}")
 
 
 async def _play_via_progress_api(
@@ -430,6 +530,7 @@ async def play_lecture(
     on_progress: Optional[Callable[[PlaybackState], None]] = None,
     debug: bool = False,
     fallback_duration: float = 0.0,
+    log_fn: Optional[Callable] = None,
 ) -> PlaybackState:
     """
     강의 URL을 headless 브라우저로 재생한다.
@@ -439,11 +540,12 @@ async def play_lecture(
         lecture_url:  LectureItem.full_url
         on_progress:  재생 진행 시 주기적으로 호출되는 콜백. PlaybackState 전달.
         debug:        True이면 단계별 진단 로그를 출력한다.
+        log_fn:       debug 출력에 사용할 로그 함수. 미지정 시 print 사용.
 
     Returns:
         최종 PlaybackState.
     """
-    log = print if debug else (lambda *a, **k: None)
+    log = log_fn if log_fn else (print if debug else (lambda *a, **k: None))
     state = PlaybackState()
 
     # 0. H.264 우회: VP8 WebM 더미 영상으로 commonscdn MP4 인터셉트
@@ -524,7 +626,10 @@ async def play_lecture(
                 if set_cookie:
                     log(f"  [SNIFF←RES] set-cookie={set_cookie}")
                 # 중요 API는 전체 body 출력, 나머지는 500자 제한
-                if body:
+                # 4xx 응답에서 body가 비어있어도 명시적으로 로깅 (원인 진단용)
+                if response.status >= 400 and any(kw in url for kw in _FULL_BODY_KEYWORDS):
+                    log(f"  [SNIFF←RES] body(4xx)={body!r}")
+                elif body:
                     if any(kw in url for kw in _FULL_BODY_KEYWORDS):
                         log(f"  [SNIFF←RES] body={body!r}")
                     elif len(body) < 500:
@@ -631,8 +736,134 @@ async def play_lecture(
         state.error = "영상이 시작되지 않았습니다."
         return state
 
+    # 6.5. GetCurrentTime/GetTotalDuration 오버라이드
+    # 가짜 WebM 재생 시 GetCurrentTime()이 apiManager 내부 상태(=0)를 반환해
+    # afterTimeUpdate의 2초 진행 조건이 충족되지 않아 진도 API가 호출되지 않는 문제 수정.
+    # video 요소에서 직접 읽도록 오버라이드하면 실제 재생 시간이 반영되어 진도 보고가 동작한다.
+    if _using_fake_video:
+        try:
+            await frame.evaluate(f"""() => {{
+                if (typeof GetCurrentTime !== 'undefined') {{
+                    GetCurrentTime = function() {{
+                        var v = document.querySelector('{_VIDEO_SEL}');
+                        return v ? v.currentTime : 0;
+                    }};
+                }}
+                if (typeof GetTotalDuration !== 'undefined') {{
+                    GetTotalDuration = function() {{
+                        var v = document.querySelector('{_VIDEO_SEL}');
+                        return v ? v.duration : 0;
+                    }};
+                }}
+                // sendPlayedTime 교체:
+                // 원본 함수는 GetCumulativePlayedPage() = 10000000000000 (apiManager 비정상값)을
+                // 그대로 URL에 포함 → 서버 400. 전역 접근 가능하므로 올바른 파라미터로 재구성한다.
+                if (typeof sendPlayedTime !== 'undefined') {{
+                    sendPlayedTime = function(stateVal) {{
+                        if (typeof lms_url === 'undefined' || !lms_url) return;
+                        var v = document.querySelector('{_VIDEO_SEL}');
+                        if (!v) return;
+                        var curTime = v.currentTime;
+                        var totalPage = typeof GetTotalPage !== 'undefined' ? GetTotalPage() : 14;
+                        var cumPage = Math.max(1, Math.ceil(curTime / v.duration * totalPage));
+                        var ts = Date.now();
+                        var cbName = 'jQuery111_' + ts;
+                        var sep = lms_url.indexOf('?') >= 0 ? '&' : '?';
+                        var url = lms_url + sep +
+                            'callback=' + cbName +
+                            '&state=' + stateVal +
+                            '&currentTime=' + curTime.toFixed(2) +
+                            '&cumulativeTime=' + curTime.toFixed(2) +
+                            '&page=' + cumPage +
+                            '&totalpage=' + totalPage +
+                            '&cumulativePage=' + cumPage +
+                            '&_=' + ts;
+                        window[cbName] = function(d) {{ delete window[cbName]; }};
+                        var s = document.createElement('script');
+                        s.src = url;
+                        document.head.appendChild(s);
+                    }};
+                }}
+                // isPlayedContent: 플레이어가 "재생 시작" 이벤트로 설정하는 플래그.
+                // 가짜 WebM에서는 apiManager가 이 이벤트를 발생시키지 않으므로 강제로 true로 설정.
+                if (typeof isPlayedContent !== 'undefined') {{
+                    isPlayedContent = true;
+                }}
+                // afterPlayStateChange: 재생 시작 이벤트 강제 전송.
+                // 서버가 START(play) 이벤트 수신 후에만 UPDATE 요청을 수락하는 경우 대비.
+                // 가짜 WebM에서는 apiManager가 play state change를 발생시키지 않으므로 수동 호출.
+                try {{
+                    if (typeof afterPlayStateChange === 'function') {{
+                        afterPlayStateChange('play');
+                    }}
+                }} catch(e) {{}}
+            }}""")
+            log("[6.5] GetCurrentTime / GetTotalDuration 오버라이드 + isPlayedContent = true 설정 완료")
+        except Exception as e:
+            log(f"[6.5] 오버라이드 실패: {e}")
+
+    # 6.6. lms_url / total_page 추출
+    # 진도 API를 page 컨텍스트(canvas.ssu.ac.kr, 동일 오리진)에서 직접 호출하기 위해
+    # commons frame에서 lms_url을 읽어 Python 변수로 저장한다.
+    _lms_url: str = ""
+    _total_page: int = 14
+    if _using_fake_video:
+        try:
+            _lms_url = await frame.evaluate(
+                "() => typeof lms_url !== 'undefined' ? lms_url : ''"
+            )
+            _total_page = int(await frame.evaluate(
+                "() => typeof GetTotalPage !== 'undefined' ? GetTotalPage() : 14"
+            ))
+            log(f"[6.6] lms_url={_lms_url[:80]!r}... total_page={_total_page}")
+        except Exception as e:
+            log(f"[6.6] lms_url 추출 실패: {e}")
+
+    if debug:
+        try:
+            js_info = await frame.evaluate("""() => {
+                var funcs = [];
+                if (window.apiManager) {
+                    Object.keys(window.apiManager).forEach(function(k) {
+                        if (typeof window.apiManager[k] === 'function') funcs.push(k);
+                    });
+                }
+                return JSON.stringify({
+                    afterTimeUpdate: typeof afterTimeUpdate,
+                    afterTimeUpdateFull: typeof afterTimeUpdate !== 'undefined'
+                        ? afterTimeUpdate.toString() : null,
+                    afterPlayStateChange: typeof afterPlayStateChange,
+                    apiManagerType: typeof window.apiManager,
+                    apiManagerFunctions: funcs.slice(0, 30),
+                    launcherType: typeof window.launcher,
+                    playTime: typeof play_time !== 'undefined' ? play_time : 'undefined',
+                    lmsUrl: typeof lms_url !== 'undefined'
+                        ? (lms_url.length > 0 ? lms_url.slice(0, 120) : '(empty)') : 'undefined',
+                    getCurrentTimeResult: typeof GetCurrentTime !== 'undefined'
+                        ? GetCurrentTime() : 'undefined',
+                    getTotalDurationResult: typeof GetTotalDuration !== 'undefined'
+                        ? GetTotalDuration() : 'undefined',
+                    isPlayedContent: typeof isPlayedContent !== 'undefined'
+                        ? isPlayedContent : 'undefined(closure?)',
+                    percentStep1: typeof PERCENT_STEP1 !== 'undefined'
+                        ? PERCENT_STEP1 : 'undefined(closure?)',
+                    percentStep2: typeof PERCENT_STEP2 !== 'undefined'
+                        ? PERCENT_STEP2 : 'undefined(closure?)',
+                    isPercentStep1Complete: typeof isPercentStep1Complete !== 'undefined'
+                        ? isPercentStep1Complete : 'undefined(closure?)',
+                    sendPlayedTimeDefined: typeof sendPlayedTime !== 'undefined',
+                    afterPlayStateChangeFull: typeof afterPlayStateChange !== 'undefined'
+                        ? afterPlayStateChange.toString() : null,
+                });
+            }""")
+            log(f"  [진단] 플레이어 JS 상태: {js_info}")
+        except Exception as e:
+            log(f"  [진단] 플레이어 JS 상태 조회 실패: {e}")
+
     # 7. 재생 완료까지 폴링
     log("[7] 재생 루프 시작")
+    _AFTER_UPDATE_INTERVAL = 30.0   # afterTimeUpdate 수동 호출 주기 (초)
+    _last_after_update = asyncio.get_event_loop().time() - _AFTER_UPDATE_INTERVAL  # 즉시 첫 호출
     while True:
         info = await _get_video_state(frame)
         if info is None:
@@ -664,7 +895,84 @@ async def play_lecture(
             log("[7] 일시정지 감지 → 강제 재생")
             await _ensure_playing(frame)
 
+        # 30초마다 afterTimeUpdate() 수동 호출
+        # 가짜 WebM 재생 시 apiManager가 timeupdate 이벤트를 발생시키지 않아
+        # afterTimeUpdate가 자동으로 호출되지 않는 경우를 보완한다.
+        # afterTimeUpdate는 commons frame 내에서 sl=1 세션 컨텍스트로 실행되므로
+        # 직접 진도 API를 호출해도 ErrAlreadyInView가 발생하지 않는다.
+        if _using_fake_video:
+            now = asyncio.get_event_loop().time()
+            if now - _last_after_update >= _AFTER_UPDATE_INTERVAL:
+                # ── 진도 API를 page 컨텍스트(canvas.ssu.ac.kr, 동일 오리진)에서 fetch ──
+                # frame 컨텍스트(commons.ssu.ac.kr)에서 script 태그로 호출하면
+                # 크로스오리진 요청이 되어 SameSite 쿠키가 전송되지 않음 → 빈 400.
+                # page 컨텍스트는 canvas.ssu.ac.kr 동일 오리진이므로 쿠키가 자동 포함된다.
+                if _lms_url and state.duration > 0:
+                    cur = state.current
+                    dur = state.duration
+                    cum_page = max(1, math.ceil(cur / dur * _total_page))
+                    ts = int(now * 1000)
+                    sep = "&" if "?" in _lms_url else "?"
+                    progress_url = (
+                        f"{_lms_url}{sep}callback=_cb_{ts}&state=8"
+                        f"&currentTime={cur:.2f}&cumulativeTime={cur:.2f}"
+                        f"&page={cum_page}&totalpage={_total_page}"
+                        f"&cumulativePage={cum_page}&_={ts}"
+                    )
+                    try:
+                        result = await page.evaluate(f"""
+                            async () => {{
+                                try {{
+                                    const resp = await fetch({json.dumps(progress_url)});
+                                    return {{s: resp.status, b: (await resp.text()).slice(0, 200)}};
+                                }} catch(e) {{
+                                    return {{s: -1, b: e.message}};
+                                }}
+                            }}
+                        """)
+                        log(
+                            f"[7] 진도 API (page ctx): {result.get('s')} "
+                            f"{result.get('b', '')!r} "
+                            f"({cur:.0f}s / {dur:.0f}s)"
+                        )
+                    except Exception as e:
+                        log(f"[7] 진도 API (page ctx) 실패: {e}")
+
+                # ── afterTimeUpdate: play_time 상태 유지용 ──
+                try:
+                    await frame.evaluate("""() => {
+                        try { isPlayedContent = true; } catch(e) {}
+                        try {
+                            // play_time을 현재 시간 직전으로 리셋:
+                            // afterTimeUpdate의 seek 분기 조건 |cur - play_time| > 2 우회.
+                            if (typeof play_time !== 'undefined' && typeof GetCurrentTime !== 'undefined') {
+                                play_time = Math.max(0, GetCurrentTime() - 1);
+                            }
+                        } catch(e) {}
+                        if (typeof afterTimeUpdate === 'function') afterTimeUpdate();
+                    }""")
+                    log(f"[7] afterTimeUpdate() 호출 ({state.current:.0f}s / {state.duration:.0f}s)")
+                except Exception as e:
+                    log(f"[7] afterTimeUpdate() 실패: {e}")
+                _last_after_update = now
+
         await asyncio.sleep(_POLL_INTERVAL)
+
+    # Plan A가 예상보다 훨씬 일찍 끝난 경우 (fake webm 고속 재생 등)
+    # duration의 50% 미만에서 ended되면 Plan B로 전환해 progress API를 직접 호출한다.
+    if state.ended and state.duration > 0 and state.current < state.duration * 0.5:
+        log(
+            f"[7] 영상이 예상보다 일찍 종료 ({state.current:.1f}s / {state.duration:.1f}s) "
+            f"— Plan B로 전환"
+        )
+        await _cleanup()
+        return await _play_via_progress_api(
+            page, player_url_snapshot, on_progress, log, fallback_duration
+        )
+
+    # Plan A 완료 후 progress API에 100% 직접 보고
+    # 플레이어 JS가 가짜 WebM 재생 중 progress API를 호출하지 않는 경우 대비
+    await _report_completion(page, player_url_snapshot, state.duration, log)
 
     await _cleanup()
     return state

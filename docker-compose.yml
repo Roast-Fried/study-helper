@@ -12,6 +12,9 @@ services:
     stdin_open: true
     tty: true
 
+    environment:
+      - TZ=Asia/Seoul
+
     env_file:
       - .env
 

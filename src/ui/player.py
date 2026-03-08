@@ -17,6 +17,7 @@ from rich.progress import (
     TaskID,
     TextColumn,
     TimeElapsedColumn,
+    TimeRemainingColumn,
 )
 from rich.text import Text
 
@@ -77,7 +78,8 @@ async def run_player(page, lec: LectureItem, debug: bool = False) -> bool:
         TextColumn("  [bold]{task.description}"),
         BarColumn(bar_width=40),
         TextColumn("{task.fields[time_str]}"),
-        TimeElapsedColumn(),
+        TextColumn("[dim]남은시간[/dim]"),
+        TimeRemainingColumn(),
         console=console,
         expand=False,
     )
@@ -109,23 +111,15 @@ async def run_player(page, lec: LectureItem, debug: bool = False) -> bool:
             time_str=time_str,
         )
 
-    if debug:
-        # 디버그 모드: Live 없이 실행 (print 출력이 Live와 충돌 방지)
+    with Live(progress, console=console, refresh_per_second=4):
         final_state = await play_lecture(
             page=page,
             lecture_url=lec.full_url,
             on_progress=on_progress,
-            debug=True,
+            debug=debug,
             fallback_duration=estimated_duration,
+            log_fn=console.log if debug else None,
         )
-    else:
-        with Live(progress, console=console, refresh_per_second=4):
-            final_state = await play_lecture(
-                page=page,
-                lecture_url=lec.full_url,
-                on_progress=on_progress,
-                fallback_duration=estimated_duration,
-            )
 
     console.print()
 
