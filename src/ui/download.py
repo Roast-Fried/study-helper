@@ -46,11 +46,22 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
 
     download_dir = Config.get_download_dir()
 
+    def _tg_error(msg_fn):
+        """텔레그램 오류 알림을 전송한다 (설정된 경우에만)."""
+        if Config.TELEGRAM_ENABLED != "true":
+            return
+        tg_token = Config.TELEGRAM_BOT_TOKEN
+        tg_chat_id = Config.TELEGRAM_CHAT_ID
+        if tg_token and tg_chat_id:
+            msg_fn(tg_token, tg_chat_id)
+
     # 1. video URL 추출
     console.print("  [dim]영상 URL 추출 중...[/dim]")
     video_url = await extract_video_url(page, lec.full_url)
     if not video_url:
         console.print("  [bold red]오류:[/bold red] 영상 URL을 찾지 못했습니다.")
+        from src.notifier.telegram_notifier import notify_download_error
+        _tg_error(lambda t, c: notify_download_error(t, c, course.long_name, lec.week_label, lec.title))
         return False
 
     # 2. 파일 경로 결정
@@ -86,6 +97,8 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
             await download_video_with_browser(page, video_url, mp4_path, on_progress=on_progress)
     except Exception as e:
         console.print(f"  [bold red]다운로드 실패:[/bold red] {e}")
+        from src.notifier.telegram_notifier import notify_download_error
+        _tg_error(lambda t, c: notify_download_error(t, c, course.long_name, lec.week_label, lec.title))
         return False
 
     # 4. mp3 변환 (audio_only 또는 both)
@@ -172,10 +185,12 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
         tg_token = Config.TELEGRAM_BOT_TOKEN
         tg_chat_id = Config.TELEGRAM_CHAT_ID
         if tg_token and tg_chat_id:
-            from src.notifier.telegram_notifier import notify_summary_complete
+            from src.notifier.telegram_notifier import notify_summary_complete, notify_summary_send_error
 
             console.print()
             console.print("  [dim]텔레그램으로 요약 전송 중...[/dim]")
+
+            summary_text = summary_path.read_text(encoding="utf-8").strip()
 
             # 자동 삭제 대상 파일 목록
             files_to_delete = None
@@ -186,7 +201,9 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
                 bot_token=tg_token,
                 chat_id=tg_chat_id,
                 course_name=course.long_name,
+                week_label=lec.week_label,
                 lecture_title=lec.title,
+                summary_text=summary_text,
                 summary_path=summary_path,
                 auto_delete_files=files_to_delete,
             )
@@ -196,5 +213,6 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
                     console.print("  [dim]파일이 자동 삭제되었습니다.[/dim]")
             else:
                 console.print("  [yellow]텔레그램 전송 실패. 파일은 유지됩니다.[/yellow]")
+                notify_summary_send_error(tg_token, tg_chat_id, course.long_name, lec.week_label, lec.title)
 
     return True

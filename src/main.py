@@ -101,10 +101,12 @@ async def run():
 
         lec, action = result
         if action == LectureAction.PLAY:
-            success = await run_player(scraper._page, lec, debug=False)
+            success, has_error = await run_player(scraper._page, lec, debug=False)
             if success:
                 lec.completion = "completed"
-                _notify_playback(selected.long_name, lec)
+                _tg_notify_playback_complete(selected.long_name, lec)
+            else:
+                _tg_notify_playback_error(selected.long_name, lec, failed=has_error)
             input("\n  Enter를 눌러 계속...")
         elif action == LectureAction.DOWNLOAD:
             rule = Config.DOWNLOAD_RULE or "both"
@@ -155,12 +157,16 @@ async def _load_courses(scraper: CourseScraper):
     return courses, details
 
 
-def _notify_playback(course_name: str, lec) -> None:
-    """재생 완료 텔레그램 알림을 전송한다 (설정된 경우에만)."""
+def _tg_token_chat() -> tuple[str, str]:
+    """텔레그램이 활성화된 경우 (token, chat_id)를 반환한다. 비활성화 시 빈 문자열."""
     if Config.TELEGRAM_ENABLED != "true":
-        return
-    token = Config.TELEGRAM_BOT_TOKEN
-    chat_id = Config.TELEGRAM_CHAT_ID
+        return "", ""
+    return Config.TELEGRAM_BOT_TOKEN, Config.TELEGRAM_CHAT_ID
+
+
+def _tg_notify_playback_complete(course_name: str, lec) -> None:
+    """재생 완료 텔레그램 알림 전송."""
+    token, chat_id = _tg_token_chat()
     if not token or not chat_id:
         return
     from src.notifier.telegram_notifier import notify_playback_complete
@@ -170,6 +176,26 @@ def _notify_playback(course_name: str, lec) -> None:
         course_name=course_name,
         week_label=lec.week_label,
         lecture_title=lec.title,
+    )
+
+
+def _tg_notify_playback_error(course_name: str, lec, failed: bool = True) -> None:
+    """재생 실패/미완료 텔레그램 알림 전송.
+
+    Args:
+        failed: True면 재생 오류, False면 재생 미완료(중단)
+    """
+    token, chat_id = _tg_token_chat()
+    if not token or not chat_id:
+        return
+    from src.notifier.telegram_notifier import notify_playback_error
+    notify_playback_error(
+        bot_token=token,
+        chat_id=chat_id,
+        course_name=course_name,
+        week_label=lec.week_label,
+        lecture_title=lec.title,
+        failed=failed,
     )
 
 

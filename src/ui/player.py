@@ -47,7 +47,7 @@ def _parse_duration(duration_str: Optional[str]) -> float:
     return 0.0
 
 
-async def run_player(page, lec: LectureItem, debug: bool = False) -> bool:
+async def run_player(page, lec: LectureItem, debug: bool = False) -> tuple[bool, bool]:
     """
     강의를 백그라운드 재생하고 CUI로 진행 상태를 표시한다.
 
@@ -56,7 +56,10 @@ async def run_player(page, lec: LectureItem, debug: bool = False) -> bool:
         lec:  재생할 LectureItem
 
     Returns:
-        True: 정상 완료 / False: 오류
+        (success, has_error)
+        - success=True: 정상 완료
+        - success=False, has_error=True: 재생 오류
+        - success=False, has_error=False: 재생 미완료(중단)
     """
     console.clear()
 
@@ -113,11 +116,11 @@ async def run_player(page, lec: LectureItem, debug: bool = False) -> bool:
 
     if final_state.error:
         console.print(f"  [bold red]재생 오류:[/bold red] {final_state.error}")
-        return False
+        return False, True
 
     if final_state.ended:
         console.print("  [bold green]재생 완료![/bold green]")
-        return True
+        return True, False
 
     console.print("  [yellow]재생이 중단되었습니다.[/yellow]")
-    return False
+    return False, False

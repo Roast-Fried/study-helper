@@ -16,7 +16,7 @@ def _send_message(bot_token: str, chat_id: str, text: str) -> bool:
     try:
         resp = requests.post(
             url,
-            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+            json={"chat_id": chat_id, "text": text},
             timeout=10,
         )
         return resp.ok
@@ -42,6 +42,19 @@ def _send_document(bot_token: str, chat_id: str, file_path: Path, caption: str =
         return False
 
 
+def _lecture_label(course_name: str, week_label: str, lecture_title: str) -> str:
+    """'과목-주차 강의명' 형식의 레이블을 반환한다."""
+    parts = []
+    if course_name:
+        parts.append(course_name)
+    if week_label:
+        parts.append(week_label)
+    prefix = "-".join(parts)
+    if prefix:
+        return f"{prefix} {lecture_title}"
+    return lecture_title
+
+
 def notify_playback_complete(
     bot_token: str,
     chat_id: str,
@@ -49,62 +62,71 @@ def notify_playback_complete(
     week_label: str,
     lecture_title: str,
 ) -> bool:
-    """
-    영상 재생 완료 알림을 전송한다.
+    """영상 재생 완료 알림을 전송한다."""
+    label = _lecture_label(course_name, week_label, lecture_title)
+    text = f"[알림] {label} 시청을 완료하였습니다."
+    return _send_message(bot_token, chat_id, text)
+
+
+def notify_playback_error(
+    bot_token: str,
+    chat_id: str,
+    course_name: str,
+    week_label: str,
+    lecture_title: str,
+    failed: bool = True,
+) -> bool:
+    """영상 재생 실패 또는 미완료 알림을 전송한다.
 
     Args:
-        bot_token:     텔레그램 봇 토큰
-        chat_id:       수신자 chat ID
-        course_name:   과목명
-        week_label:    주차 레이블 (예: "1주차")
-        lecture_title: 강의 제목
-
-    Returns:
-        전송 성공 여부
+        failed: True면 '재생을 실패', False면 '재생을 완료하지 못함'
     """
-    lines = ["✅ <b>강의 시청 완료</b>", ""]
-    if course_name:
-        lines.append(f"📚 과목: {course_name}")
-    if week_label:
-        lines.append(f"📅 주차: {week_label}")
-    lines.append(f"🎬 강의: {lecture_title}")
-    lines.append("")
-    lines.append("LMS에 출석이 자동 처리되었습니다.")
+    label = _lecture_label(course_name, week_label, lecture_title)
+    if failed:
+        text = f"[오류] {label} 재생을 실패하였습니다."
+    else:
+        text = f"[오류] {label} 재생을 완료하지 못하였습니다."
+    return _send_message(bot_token, chat_id, text)
 
-    return _send_message(bot_token, chat_id, "\n".join(lines))
+
+def notify_download_error(
+    bot_token: str,
+    chat_id: str,
+    course_name: str,
+    week_label: str,
+    lecture_title: str,
+) -> bool:
+    """다운로드 실패 알림을 전송한다."""
+    label = _lecture_label(course_name, week_label, lecture_title)
+    text = f"[오류] {label} 다운로드에 실패하였습니다."
+    return _send_message(bot_token, chat_id, text)
 
 
 def notify_summary_complete(
     bot_token: str,
     chat_id: str,
     course_name: str,
+    week_label: str,
     lecture_title: str,
+    summary_text: str,
     summary_path: Path,
     auto_delete_files: Optional[list[Path]] = None,
 ) -> bool:
-    """
-    AI 요약 완료 알림 및 요약 파일을 전송한다.
+    """AI 요약 완료 알림을 전송한다. 요약 내용을 메시지로, 파일도 함께 첨부한다.
     전송 성공 시 auto_delete_files에 포함된 파일을 삭제한다.
-
-    Args:
-        bot_token:          텔레그램 봇 토큰
-        chat_id:            수신자 chat ID
-        course_name:        과목명
-        lecture_title:      강의 제목
-        summary_path:       요약 결과 .txt 파일 경로
-        auto_delete_files:  전송 성공 후 삭제할 파일 목록 (None이면 삭제 안 함)
-
-    Returns:
-        전송 성공 여부
     """
-    caption_lines = ["📝 <b>AI 요약 완료</b>", ""]
-    if course_name:
-        caption_lines.append(f"📚 과목: {course_name}")
-    caption_lines.append(f"🎬 강의: {lecture_title}")
+    label = _lecture_label(course_name, week_label, lecture_title)
+    text = f"[알림] {label}의 요약 내용을 다음과 같이 제공해드립니다.\n\n{summary_text}"
 
-    success = _send_document(
-        bot_token, chat_id, summary_path, caption="\n".join(caption_lines)
-    )
+    # 요약 내용 텍스트 메시지 전송 (4096자 초과 시 잘라서 전송)
+    _MAX = 4096
+    chunks = [text[i:i + _MAX] for i in range(0, len(text), _MAX)]
+    msg_ok = all(_send_message(bot_token, chat_id, chunk) for chunk in chunks)
+
+    # 요약 파일 첨부 전송
+    file_ok = _send_document(bot_token, chat_id, summary_path, caption=f"{label} 요약 파일")
+
+    success = msg_ok and file_ok
 
     if success and auto_delete_files:
         for path in auto_delete_files:
@@ -117,16 +139,27 @@ def notify_summary_complete(
     return success
 
 
+def notify_summary_send_error(
+    bot_token: str,
+    chat_id: str,
+    course_name: str,
+    week_label: str,
+    lecture_title: str,
+) -> bool:
+    """요약 내용 발송 실패 알림을 전송한다."""
+    label = _lecture_label(course_name, week_label, lecture_title)
+    text = f"[오류] {label} 요약 내용 발송에 실패하였습니다."
+    return _send_message(bot_token, chat_id, text)
+
+
 def verify_bot(bot_token: str, chat_id: str) -> tuple[bool, str]:
-    """
-    봇 토큰과 chat ID가 유효한지 확인하고 테스트 메시지를 전송한다.
+    """봇 토큰과 chat ID가 유효한지 확인하고 테스트 메시지를 전송한다.
 
     Returns:
         (성공 여부, 오류 메시지 또는 빈 문자열)
     """
     import requests
 
-    # 봇 정보 확인
     try:
         resp = requests.get(
             f"https://api.telegram.org/bot{bot_token}/getMe",
@@ -140,10 +173,9 @@ def verify_bot(bot_token: str, chat_id: str) -> tuple[bool, str]:
     except Exception as e:
         return False, f"네트워크 오류: {e}"
 
-    # 테스트 메시지 전송
     ok = _send_message(
         bot_token, chat_id,
-        f"✅ study-helper 텔레그램 알림이 연결되었습니다!\n봇: @{bot_name}"
+        f"[알림] study-helper 텔레그램 알림이 연결되었습니다! (봇: @{bot_name})"
     )
     if not ok:
         return False, "메시지 전송 실패. Chat ID를 확인하세요."
