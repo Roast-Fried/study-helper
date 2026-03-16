@@ -18,36 +18,14 @@ load_dotenv(_env_path)
 def _load_credential(env_key: str) -> str:
     """
     환경변수를 읽어 복호화한다.
-    enc: 접두사가 있는데 복호화 실패 시(키 불일치) .env의 해당 키를 비워 재입력을 유도한다.
+    복호화 실패 시(키 불일치 등) 빈 문자열을 반환하되, .env 값은 보존한다.
     """
     raw = os.getenv(env_key, "")
     if not raw:
         return ""
     if is_encrypted(raw):
-        result = decrypt(raw)
-        if not result:
-            # 복호화 실패 → .env에서 해당 키 초기화
-            _clear_env_key(env_key)
-        return result
+        return decrypt(raw)
     return raw
-
-
-def _clear_env_key(env_key: str) -> None:
-    """복호화 실패한 키를 .env에서 비운다."""
-    try:
-        lines = _env_path.read_text(encoding="utf-8").splitlines(keepends=True)
-        new_lines = []
-        for line in lines:
-            stripped = line.strip()
-            if "=" in stripped and not stripped.startswith("#"):
-                key = stripped.split("=", 1)[0].strip()
-                if key == env_key:
-                    new_lines.append(f"{key}=\n")
-                    continue
-            new_lines.append(line)
-        _env_path.write_text("".join(new_lines), encoding="utf-8")
-    except Exception:
-        pass
 
 
 def _default_download_dir() -> str:
