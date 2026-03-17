@@ -15,13 +15,16 @@ dependencies = [
     # STT — faster-whisper (CTranslate2 기반, torch 불필요)
     "faster-whisper>=1.1.0",
     # AI 요약
-    "google-genai>=1.0.0",
-    "openai>=1.0.0",
+    "google-genai>=1.0.0,<2",
+    "openai>=1.0.0,<2",
     # 환경변수
     "python-dotenv>=1.0.0",
-    "cryptography>=46.0.5",
+    "cryptography>=46.0.5,<47",
     # CVE-2025-68146, CVE-2026-22701 대응 — 3.20.0 취약 버전 제외
     "filelock>=3.25.0",
+    # API 서버 (Electron GUI 앱 연동)
+    "fastapi>=0.115.0,<1",
+    "uvicorn>=0.34.0,<1",
 ]
 
 [project.optional-dependencies]
