@@ -263,7 +263,8 @@ class CourseScraper:
         if expand_btn:
             btn_text = await expand_btn.text_content()
             if btn_text and "펼치기" in btn_text:
-                await expand_btn.click()
+                # LMS breadcrumb가 iframe 위를 덮어 click이 차단되므로 JS로 직접 클릭
+                await expand_btn.evaluate("el => el.click()")
                 await asyncio.sleep(0.5)
 
         weeks = await self._parse_weeks(iframe)
