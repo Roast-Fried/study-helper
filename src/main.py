@@ -6,6 +6,7 @@ from rich.live import Live
 from rich.text import Text
 
 from src.config import Config
+from src.logger import get_logger
 from src.scraper.course_scraper import CourseScraper
 from src.scraper.models import Course
 from src.ui.courses import _AUTO_SENTINEL, LectureAction, show_course_list, show_week_list
@@ -26,6 +27,9 @@ _MAX_LOGIN_ATTEMPTS = 3
 
 
 async def run():
+    _log = get_logger("main")
+    _log.info("=== Study Helper 시작 ===")
+
     # .env 파일이 없으면 빈 파일 생성 (볼륨 마운트 후 디렉토리가 생성되는 것 방지)
     from pathlib import Path
 

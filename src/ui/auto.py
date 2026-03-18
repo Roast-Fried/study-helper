@@ -16,6 +16,7 @@ from rich.prompt import Prompt
 from rich.text import Text
 
 from src.config import KST, Config, get_data_path
+from src.logger import get_logger
 from src.service.scheduler import (
     DEFAULT_SCHEDULE_HOURS,
     check_auto_prerequisites,
@@ -25,6 +26,7 @@ from src.service.scheduler import (
 )
 
 console = Console()
+_log = get_logger("auto")
 
 # 자동 모드 진행 상태 파일
 _PROGRESS_FILE = get_data_path("auto_progress.json")
@@ -182,6 +184,7 @@ async def run_auto_mode(scraper, courses, details) -> None:
 
             console.print()
             now_str = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
+            _log.info("스케줄 체크 시작")
             console.print(f"  [bold cyan][{now_str}] 스케줄 체크 시작[/bold cyan]")
             console.print()
 
@@ -191,6 +194,7 @@ async def run_auto_mode(scraper, courses, details) -> None:
 
                 details = await _reload_details(scraper, courses)
             except Exception as e:
+                _log.error("강의 목록 갱신 실패: %s", e)
                 console.print(f"  [red]강의 목록 갱신 실패: {e}[/red]")
                 await asyncio.sleep(60)
                 continue
@@ -232,10 +236,12 @@ async def run_auto_mode(scraper, courses, details) -> None:
                 (c, l) for c, l in all_needs_watch if l.full_url not in completed
             ]
 
-            console.print(
-                f"  [dim]전체 비디오 {total_videos}개 / 미시청 {len(all_needs_watch)}개 "
-                f"/ progress {len(completed)}개 / 대상 {len(pending_list)}개[/dim]"
+            stats_msg = (
+                f"전체 비디오 {total_videos}개 / 미시청 {len(all_needs_watch)}개 "
+                f"/ progress {len(completed)}개 / 대상 {len(pending_list)}개"
             )
+            _log.info(stats_msg)
+            console.print(f"  [dim]{stats_msg}[/dim]")
 
             if not pending_list:
                 console.print("  [dim]미시청 강의가 없습니다.[/dim]")
@@ -282,6 +288,7 @@ async def _process_lecture(scraper, course, lec, stop_event: asyncio.Event) -> b
 
     label = f"[{course.long_name}] {lec.title}"
     now_str = datetime.now(KST).strftime("%H:%M:%S")
+    _log.info("처리 시작: %s", label)
     console.print(f"  [{now_str}] [bold]{label}[/bold] 처리 중...")
 
     # ── 재생 ──────────────────────────────────────────────────────
@@ -290,12 +297,15 @@ async def _process_lecture(scraper, course, lec, stop_event: asyncio.Event) -> b
         success, has_error = await run_player(scraper._page, lec)
         if not success:
             err_msg = "재생 오류" if has_error else "재생 미완료"
+            _log.warning("재생 실패: %s — %s", label, err_msg)
             console.print(f"  [yellow]  → {err_msg}: {label}[/yellow]")
             _tg_error_notify(course, lec, err_msg)
             return False
         lec.completion = "completed"
+        _log.info("재생 완료: %s", label)
         console.print("  [dim]  → 재생 완료[/dim]")
     except Exception as e:
+        _log.error("재생 예외: %s — %s", label, e, exc_info=True)
         console.print(f"  [red]  → 재생 실패: {e}[/red]")
         _tg_error_notify(course, lec, f"재생 실패: {e}")
         return False

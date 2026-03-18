@@ -5,6 +5,7 @@ from collections.abc import Callable
 from playwright.async_api import Frame, Page, async_playwright
 
 from src.auth.login import ensure_logged_in
+from src.logger import get_logger
 from src.scraper.models import (
     Course,
     CourseDetail,
@@ -43,13 +44,19 @@ class CourseScraper:
         self.username = username
         self.password = password
         self.headless = headless
-        self._log = log_callback or (lambda msg: None)
+        self._file_log = get_logger("scraper")
+        self._ui_log = log_callback or (lambda msg: None)
         self._pw = None
         self._browser = None
         self._context = None
         self._page = None
         self._login_lock = asyncio.Lock()
         self._session_restored = False  # 병렬 재로그인 중복 방지 플래그
+
+    def _log(self, msg: str, level: str = "info") -> None:
+        """파일 로거 + UI 콜백 양쪽에 출력한다."""
+        getattr(self._file_log, level, self._file_log.info)(msg)
+        self._ui_log(msg)
 
     async def _setup_browser(self):
         _args = [
@@ -215,11 +222,15 @@ class CourseScraper:
                         if attempt < max_retries:
                             self._log(
                                 f"강의 로딩 실패 ({course.long_name}), "
-                                f"재시도 {attempt + 1}/{max_retries}: {e}"
+                                f"재시도 {attempt + 1}/{max_retries}: {e}",
+                                "warning",
                             )
                             await asyncio.sleep(1)
                         else:
-                            self._log(f"강의 로딩 실패 ({course.long_name}): {e}")
+                            self._log(
+                                f"강의 로딩 실패 ({course.long_name}): {e}",
+                                "error",
+                            )
                             results[idx] = None
                     finally:
                         await page.close()

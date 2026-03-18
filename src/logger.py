@@ -1,22 +1,71 @@
 """
 로그 모듈.
 
-오류 발생 시에만 logs/ 디렉토리에 로그 파일을 생성한다.
-정상 동작 시에는 파일이 생성되지 않는다.
+1. 앱 전역 로거 — 세션 단위 로그 파일 + 콘솔 출력
+2. 에러 전용 로거 — 개별 동작(play, download)별 에러 로그 (기존 호환)
 
-로그 파일 형식: logs/YYYYMMDD_HHMMSS_<action>.log
+로그 파일: logs/study_helper_YYYYMMDD.log (일별 로테이션, 7일 보관)
+에러 파일: logs/YYYYMMDD_HHMMSS_<action>.log (기존 동작 유지)
 """
 
 import logging
+import os
 from datetime import datetime
+from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
 _LOGS_DIR = Path(__file__).parent.parent / "logs"
 
+# Docker 환경에서는 /data/logs 사용
+if Path("/data").exists():
+    _LOGS_DIR = Path("/data/logs")
+elif os.getenv("STUDY_HELPER_DATA_DIR"):
+    _LOGS_DIR = Path(os.getenv("STUDY_HELPER_DATA_DIR")) / "logs"
+
+_app_logger: logging.Logger | None = None
+
+
+def get_logger(name: str = "study_helper") -> logging.Logger:
+    """앱 전역 로거를 반환한다.
+
+    최초 호출 시 파일 핸들러(일별 로테이션)를 설정한다.
+    이후 호출에서는 child 로거를 반환한다.
+    """
+    global _app_logger
+
+    if _app_logger is None:
+        _app_logger = logging.getLogger("study_helper")
+        _app_logger.setLevel(logging.DEBUG)
+        _app_logger.propagate = False
+
+        _LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        log_path = _LOGS_DIR / "study_helper.log"
+
+        # 일별 로테이션, 7일 보관
+        file_handler = TimedRotatingFileHandler(
+            log_path,
+            when="midnight",
+            interval=1,
+            backupCount=7,
+            encoding="utf-8",
+        )
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s [%(levelname)-5s] %(name)s: %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+            )
+        )
+        _app_logger.addHandler(file_handler)
+
+    if name == "study_helper":
+        return _app_logger
+    return _app_logger.getChild(name.removeprefix("study_helper."))
+
 
 def get_error_logger(action: str) -> tuple[logging.Logger, Path]:
     """
-    오류 기록용 파일 로거를 생성한다.
+    오류 기록용 파일 로거를 생성한다. (기존 호환)
 
     Args:
         action: 로그 파일 이름에 포함할 동작 식별자 (예: "play", "download")

@@ -3,6 +3,7 @@
 !.env.example
 .secret_key
 data/
+logs/
 .venv/
 __pycache__/
 *.pyc
