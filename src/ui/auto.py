@@ -414,14 +414,9 @@ def _check_download_gaps(courses, details) -> None:
         # 텔레그램 알림
         creds = Config.get_telegram_credentials()
         if creds:
-            from src.notifier.telegram_notifier import _send_message
+            from src.notifier.telegram_notifier import notify_download_gaps
 
-            lines = [f"[다운로드 누락 점검] {len(missing)}건 감지"]
-            for course_name, week, title, ftype in missing[:10]:
-                lines.append(f"  • {course_name} {week} {title} ({ftype})")
-            if len(missing) > 10:
-                lines.append(f"  ... 외 {len(missing) - 10}건")
-            _send_message(creds[0], creds[1], "\n".join(lines))
+            notify_download_gaps(creds[0], creds[1], missing)
 
 
 def _tg_error_notify(course, lec, error_msg: str) -> None:

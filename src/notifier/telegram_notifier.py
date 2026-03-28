@@ -147,6 +147,24 @@ def notify_auto_error(
     return _send_message(bot_token, chat_id, text)
 
 
+def notify_download_gaps(
+    bot_token: str,
+    chat_id: str,
+    missing: list[tuple[str, str, str, str]],
+) -> bool:
+    """다운로드 누락 점검 결과를 전송한다.
+
+    Args:
+        missing: [(course_name, week_label, title, file_type), ...] 형태의 누락 목록
+    """
+    lines = [f"[다운로드 누락 점검] {len(missing)}건 감지"]
+    for course_name, week, title, ftype in missing[:10]:
+        lines.append(f"  • {course_name} {week} {title} ({ftype})")
+    if len(missing) > 10:
+        lines.append(f"  ... 외 {len(missing) - 10}건")
+    return _send_message(bot_token, chat_id, "\n".join(lines))
+
+
 def notify_summary_complete(
     bot_token: str,
     chat_id: str,

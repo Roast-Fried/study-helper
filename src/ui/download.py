@@ -91,8 +91,8 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
     if not video_url:
         console.print("  [bold red]오류:[/bold red] 영상 URL을 찾지 못했습니다. (3회 시도)")
         logger, log_path = get_error_logger("download")
-        logger.info(f"강의: {lec.title}")
-        logger.info(f"URL: {lec.full_url}")
+        logger.info("강의: %s", lec.title)
+        logger.info("URL: %s", lec.full_url)
         logger.info("오류: 영상 URL 추출 실패 (3회 재시도 후에도 실패)")
         console.print(f"  [dim]로그 저장: {log_path}[/dim]")
         from src.notifier.telegram_notifier import notify_download_error
@@ -139,10 +139,10 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
     except Exception as e:
         console.print(f"  [bold red]다운로드 실패:[/bold red] {e}")
         logger, log_path = get_error_logger("download")
-        logger.info(f"강의: {lec.title}")
-        logger.info(f"URL: {lec.full_url}")
-        logger.info(f"영상 URL: {video_url}")
-        logger.error(f"다운로드 실패: {e}", exc_info=True)
+        logger.info("강의: %s", lec.title)
+        logger.info("URL: %s", lec.full_url)
+        logger.info("영상 URL: %s", video_url)
+        logger.error("다운로드 실패: %s", e, exc_info=True)
         console.print(f"  [dim]로그 저장: {log_path}[/dim]")
         from src.notifier.telegram_notifier import notify_download_error
 

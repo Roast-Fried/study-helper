@@ -41,10 +41,10 @@ class PlaybackState:
     error: str | None = None
 
 
-# ── 내부 헬퍼 ────────────────────────────────────────────────────
+# ── 브라우저 헬퍼 (player + downloader 공용) ──────────────────────
 
 
-async def _find_player_frame(page: Page) -> Frame | None:
+async def find_player_frame(page: Page) -> Frame | None:
     """
     tool_content 아래 commons.ssu.ac.kr frame을 찾는다.
     재생 버튼이 있는 초기 플레이어 선택 화면 frame.
@@ -87,7 +87,7 @@ async def _find_video_frame(page: Page) -> Frame | None:
     return None
 
 
-async def _dismiss_dialog(frame: Frame, restart: bool = True) -> bool:
+async def dismiss_dialog(frame: Frame, restart: bool = True) -> bool:
     """이어보기 다이얼로그가 표시되면 처리한다. 처리했으면 True 반환."""
     try:
         dialog = await frame.query_selector(_DIALOG_SEL)
@@ -104,7 +104,7 @@ async def _dismiss_dialog(frame: Frame, restart: bool = True) -> bool:
     return False
 
 
-async def _click_play(frame: Frame) -> bool:
+async def click_play(frame: Frame) -> bool:
     """재생 버튼을 클릭한다. 성공 시 True."""
     try:
         btn = await frame.wait_for_selector(_PLAY_BTN, timeout=_PLAY_TIMEOUT * 1000)
@@ -880,7 +880,7 @@ async def _play_lecture_inner(
 
     # 2. 초기 플레이어 선택 화면 frame 탐색 (재생 버튼이 있는 곳)
     log("[2] 플레이어 선택 화면 frame 탐색 중...")
-    player_frame = await _find_player_frame(page)
+    player_frame = await find_player_frame(page)
     if not player_frame:
         log("    → 실패: tool_content 또는 commons.ssu.ac.kr frame 없음")
         log("    → 현재 프레임 목록:")
@@ -899,7 +899,7 @@ async def _play_lecture_inner(
                 try:
                     await page.goto(lecture_url, wait_until="domcontentloaded", timeout=60000)
                     await asyncio.sleep(3)
-                    retry_frame = await _find_player_frame(page)
+                    retry_frame = await find_player_frame(page)
                     if retry_frame:
                         log(f"    → commons frame 발견: {retry_frame.url}")
                         return await _play_via_progress_api(
@@ -917,17 +917,17 @@ async def _play_lecture_inner(
 
     # 3. 이어보기 다이얼로그 처리 (처음부터 재생)
     await asyncio.sleep(1)
-    dismissed = await _dismiss_dialog(player_frame, restart=True)
+    dismissed = await dismiss_dialog(player_frame, restart=True)
     log(f"[3] 이어보기 다이얼로그: {'처리됨' if dismissed else '없음'}")
 
     # 4. 재생 버튼 클릭
     log(f"[4] 재생 버튼({_PLAY_BTN}) 클릭 시도...")
-    clicked = await _click_play(player_frame)
+    clicked = await click_play(player_frame)
     log(f"    → {'클릭 성공' if clicked else '버튼 없음 또는 타임아웃'}")
 
     # 이어보기 다이얼로그가 재생 버튼 클릭 후 뜨는 경우도 처리
     await asyncio.sleep(1)
-    dismissed2 = await _dismiss_dialog(player_frame, restart=True)
+    dismissed2 = await dismiss_dialog(player_frame, restart=True)
     log(f"[4b] 재생 후 이어보기 다이얼로그: {'처리됨' if dismissed2 else '없음'}")
 
     # 5. 재생 버튼 클릭 후 video 태그가 있는 frame을 새로 탐색

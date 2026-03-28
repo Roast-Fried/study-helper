@@ -142,9 +142,7 @@ async def run():
 
 async def _try_login(user_id: str, password: str) -> CourseScraper | None:
     """CourseScraper로 로그인을 시도한다. 실패 시 None 반환."""
-    from rich.console import Console as _C
-
-    _console = _C()
+    _console = Console()
     scraper = CourseScraper(
         username=user_id,
         password=password,
@@ -153,9 +151,6 @@ async def _try_login(user_id: str, password: str) -> CourseScraper | None:
     try:
         await scraper.start()
         return scraper
-    except RuntimeError:
-        await scraper.close()
-        return None
     except Exception:
         await scraper.close()
         return None

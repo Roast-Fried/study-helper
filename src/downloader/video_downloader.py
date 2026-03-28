@@ -17,13 +17,18 @@ from urllib.parse import urlparse
 import requests
 from playwright.async_api import Page
 
-from src.player.background_player import _click_play, _dismiss_dialog, _find_player_frame
+from src.player.background_player import click_play, dismiss_dialog, find_player_frame
 
 _dl_log = logging.getLogger(__name__)
 
 _MAX_RETRIES = 3
 _TIMEOUT = (10, 60)  # (connect, read) seconds
 _CHUNK_SIZE = 65536  # 64 KB
+_PAGE_GOTO_TIMEOUT = 60_000  # ms — Playwright page.goto timeout
+_CONTENT_PHP_POLL_MAX = 20  # content.php 파싱 대기 폴링 횟수 (x0.5s = 10s)
+_VIDEO_POLL_MAX = 120  # video DOM 폴링 횟수 (x0.5s = 60s)
+_DIALOG_SETTLE_SEC = 1  # 다이얼로그 렌더링 대기 (초)
+_POLL_INTERVAL_SEC = 0.5  # 폴링 간격 (초)
 
 # 다운로드 허용 도메인 (SSRF 방어)
 _ALLOWED_SCHEMES = {"https", "http"}
@@ -122,7 +127,7 @@ async def extract_video_url(page: Page, lecture_url: str) -> str | None:
                 except Exception as e:
                     _dl_log.debug("content.php 파싱 오류: %s", e)
 
-            task = asyncio.ensure_future(_parse_content_php())
+            task = asyncio.create_task(_parse_content_php())
             task.add_done_callback(lambda t: t.exception() if not t.cancelled() and t.exception() else None)
             _bg_tasks.append(task)
 
@@ -131,10 +136,10 @@ async def extract_video_url(page: Page, lecture_url: str) -> str | None:
 
     try:
         # print(f"  [DBG] 페이지 이동: {lecture_url[:80]}")
-        await page.goto(lecture_url, wait_until="domcontentloaded", timeout=60000)
+        await page.goto(lecture_url, wait_until="domcontentloaded", timeout=_PAGE_GOTO_TIMEOUT)
         # iframe + content.php 로드 대기 (비동기 파싱 완료까지)
-        for _ in range(20):  # 최대 10초
-            await asyncio.sleep(0.5)
+        for _ in range(_CONTENT_PHP_POLL_MAX):
+            await asyncio.sleep(_POLL_INTERVAL_SEC)
             if captured["url"]:
                 break
         # print(f"  [DBG] 현재 페이지 URL: {page.url[:80]}")
@@ -144,7 +149,7 @@ async def extract_video_url(page: Page, lecture_url: str) -> str | None:
             # print(f"  [NET] content.php에서 미디어 URL 추출 성공: {captured['url']}")
             return captured["url"]
 
-        player_frame = await _find_player_frame(page)
+        player_frame = await find_player_frame(page)
         if not player_frame:
             # print("  [DBG] player frame을 찾지 못했습니다.")
             # for f in page.frames:
@@ -154,25 +159,24 @@ async def extract_video_url(page: Page, lecture_url: str) -> str | None:
         # print(f"  [DBG] player frame 발견: {player_frame.url[:80]}")
 
         # 이어보기 다이얼로그 처리 후 재생 버튼 클릭
-        await asyncio.sleep(1)
-        await _dismiss_dialog(player_frame, restart=True)
-        await _click_play(player_frame)
-        # print(f"  [DBG] 재생 버튼 클릭: {'성공' if clicked else '실패(버튼 없음)'}")
-        await asyncio.sleep(1)
-        await _dismiss_dialog(player_frame, restart=True)
+        await asyncio.sleep(_DIALOG_SETTLE_SEC)
+        await dismiss_dialog(player_frame, restart=True)
+        await click_play(player_frame)
+        await asyncio.sleep(_DIALOG_SETTLE_SEC)
+        await dismiss_dialog(player_frame, restart=True)
 
         # 최대 60초 폴링: Plan A(video DOM) + Plan B(network 캡처) 동시 확인
         # 재생 후 새로운 frame이 생성될 수 있으므로 page.frames 전체를 매번 재스캔
         # 이어보기 다이얼로그도 매 폴링마다 체크 (재생 도중 뒤늦게 뜨는 경우 대응)
         dialog_dismissed = False
-        for _i in range(120):
+        for _i in range(_VIDEO_POLL_MAX):
             # Plan B 먼저 확인 (network에서 이미 캡처됐을 수 있음)
             if captured["url"]:
                 return captured["url"]
 
             # 이어보기 다이얼로그가 재생 도중 뒤늦게 뜨는 경우 처리
             if not dialog_dismissed:
-                dialog_dismissed = await _dismiss_dialog(player_frame, restart=True)
+                dialog_dismissed = await dismiss_dialog(player_frame, restart=True)
 
             # Plan A: 모든 commons frame에서 video 태그 src 확인 (재생 후 새 frame 포함)
             commons_frames = [f for f in page.frames if "commons.ssu.ac.kr" in f.url]
@@ -208,7 +212,7 @@ async def extract_video_url(page: Page, lecture_url: str) -> str | None:
                 except Exception:
                     pass  # if i % 10 == 0: print(f"  [DBG]   video 평가 오류: {e}")
 
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(_POLL_INTERVAL_SEC)
 
         # 폴링 종료 (60초) — 아래 디버그 코드는 URL 추출 실패 시 원인 분석용
         # print("  [DBG] 60초 폴링 종료. player 설정 파일 분석...")
@@ -281,7 +285,7 @@ async def download_video_with_browser(
             last_error = e
             _remove_partial(save_path)
             if attempt < _MAX_RETRIES:
-                time.sleep(2**attempt)
+                await asyncio.sleep(2**attempt)
         except Exception as e:
             # 재시도 불가능한 오류 (ValueError, 인증 실패 등) → 즉시 중단
             last_error = e
