@@ -228,8 +228,17 @@ class Config:
                 new_lines.append(f"{key}={value}\n")
 
         # atomic write: 임시 파일에 먼저 쓴 뒤 rename으로 대체 (쓰기 중 크래시 시 원본 보존)
-        tmp_path = env_path.with_suffix(".env.tmp")
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            f.writelines(new_lines)
-            f.flush()
-        tmp_path.replace(env_path)
+        import os
+        import tempfile
+
+        fd, tmp_str = tempfile.mkstemp(dir=env_path.parent, prefix=".env.", suffix=".tmp")
+        tmp_path = Path(tmp_str)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.writelines(new_lines)
+                f.flush()
+                os.fsync(f.fileno())
+            tmp_path.replace(env_path)
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            raise

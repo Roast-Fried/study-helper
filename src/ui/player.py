@@ -4,8 +4,6 @@
 백그라운드 재생 진행 상태를 rich Progress bar로 표시한다.
 """
 
-from urllib.parse import urlparse
-
 from rich.console import Console
 from rich.live import Live
 from rich.progress import (
@@ -20,12 +18,7 @@ from src.config import Config
 from src.logger import get_error_logger
 from src.player.background_player import PlaybackState, play_lecture
 from src.scraper.models import LectureItem
-
-
-def _safe_url(url: str) -> str:
-    """URL에서 쿼리 파라미터를 제거하여 세션 토큰 노출을 방지한다."""
-    return urlparse(url)._replace(query="", fragment="").geturl()
-
+from src.utils import safe_url
 
 console = Console()
 
@@ -163,7 +156,7 @@ async def run_player(page, lec: LectureItem, debug: bool = False) -> tuple[bool,
         # 오류 발생 시에만 로그 파일 생성
         logger, log_path = get_error_logger("play")
         logger.info(f"강의: {lec.title}")
-        logger.info(f"URL: {_safe_url(lec.full_url)}")
+        logger.info(f"URL: {safe_url(lec.full_url)}")
         logger.info(f"오류: {final_state.error}")
         logger.info("--- 재생 로그 ---")
         for line in _get_log_buffer():
@@ -179,7 +172,7 @@ async def run_player(page, lec: LectureItem, debug: bool = False) -> tuple[bool,
     # 재생 미완료(중단)도 로그 저장
     logger, log_path = get_error_logger("play")
     logger.info(f"강의: {lec.title}")
-    logger.info(f"URL: {_safe_url(lec.full_url)}")
+    logger.info(f"URL: {safe_url(lec.full_url)}")
     logger.info(f"상태: 재생 미완료 (current={final_state.current:.1f}s / duration={final_state.duration:.1f}s)")
     logger.info("--- 재생 로그 ---")
     for line in _get_log_buffer():

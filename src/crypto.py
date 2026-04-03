@@ -9,6 +9,7 @@
 """
 
 import os
+import threading
 from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -95,15 +96,17 @@ def _load_or_create_key() -> bytes:
 # 의도적 캐시: 반복 호출 시 키 파일 I/O 절약. 프로세스 종료 시 자동 소멸.
 _cached_fernet: Fernet | None = None
 _cached_fernet_key: bytes | None = None
+_cache_lock = threading.Lock()
 
 
 def _fernet() -> Fernet:
     global _cached_fernet, _cached_fernet_key
-    key = _load_or_create_key()
-    if _cached_fernet is None or _cached_fernet_key != key:
-        _cached_fernet = Fernet(key)
-        _cached_fernet_key = key
-    return _cached_fernet
+    with _cache_lock:
+        key = _load_or_create_key()
+        if _cached_fernet is None or _cached_fernet_key != key:
+            _cached_fernet = Fernet(key)
+            _cached_fernet_key = key
+        return _cached_fernet
 
 
 def encrypt(plaintext: str) -> str:

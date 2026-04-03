@@ -109,11 +109,12 @@ async def transcribe(body: TranscribeRequest):
 @router.post("/summarize")
 async def summarize(body: SummarizeRequest):
     """텍스트를 AI로 요약한다."""
+    txt = _validate_path_in_download_dir(body.txt_path)
     loop = asyncio.get_running_loop()
     summary_path = await loop.run_in_executor(
         None,
         lambda: summarize_text(
-            Path(body.txt_path),
+            txt,
             agent=body.agent,
             api_key=body.api_key,
             model=body.model,

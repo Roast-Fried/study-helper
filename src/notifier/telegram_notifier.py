@@ -247,9 +247,13 @@ def notify_summary_send_error(
 def verify_bot(bot_token: str, chat_id: str) -> tuple[bool, str]:
     """봇 토큰과 chat ID가 유효한지 확인하고 테스트 메시지를 전송한다.
 
+    봇 토큰 형식 검증 → getMe API 호출 → 테스트 메시지 전송 순서로 진행한다.
+
     Returns:
         (성공 여부, 오류 메시지 또는 빈 문자열)
     """
+    if not _BOT_TOKEN_RE.match(bot_token):
+        return False, "봇 토큰 형식이 올바르지 않습니다."
 
     try:
         resp = requests.get(

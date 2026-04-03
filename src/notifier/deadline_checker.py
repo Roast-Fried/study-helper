@@ -102,7 +102,9 @@ def _load_notified() -> set[str]:
 def _save_notified(notified: set[str]) -> None:
     try:
         _DEADLINE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _DEADLINE_FILE.write_text(json.dumps(sorted(notified)), encoding="utf-8")
+        tmp_path = _DEADLINE_FILE.with_suffix(".json.tmp")
+        tmp_path.write_text(json.dumps(sorted(notified)), encoding="utf-8")
+        tmp_path.replace(_DEADLINE_FILE)
     except Exception as e:
         print(f"  [경고] deadline_notified.json 저장 실패: {e}", file=sys.stderr)
 

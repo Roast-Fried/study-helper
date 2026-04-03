@@ -51,10 +51,12 @@ def _load_progress() -> set[str]:
 
 
 def _save_progress(completed: set[str]) -> None:
-    """처리 완료된 강의 URL 목록을 저장한다."""
+    """처리 완료된 강의 URL 목록을 저장한다 (atomic write)."""
     try:
         _PROGRESS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _PROGRESS_FILE.write_text(json.dumps(sorted(completed)), encoding="utf-8")
+        tmp_path = _PROGRESS_FILE.with_suffix(".json.tmp")
+        tmp_path.write_text(json.dumps(sorted(completed)), encoding="utf-8")
+        tmp_path.replace(_PROGRESS_FILE)
         try:
             _PROGRESS_FILE.chmod(0o600)
         except OSError:

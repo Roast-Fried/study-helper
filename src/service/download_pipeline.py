@@ -49,8 +49,8 @@ class PipelineResult:
     stage_errors: dict[str, str] = field(default_factory=dict)
 
 
-# 콜백 타입
-ProgressCallback = Callable[[PipelineProgress], None]
+# 콜백 타입: 동기/비동기 모두 지원 (_emit에서 isawaitable 체크)
+ProgressCallback = Callable[[PipelineProgress], None]  # sync or async
 
 
 def resolve_download_path(

@@ -787,7 +787,8 @@ async def play_lecture(
             if "commons.ssu.ac.kr" in url or "learningx" in url:
                 log(f"  [SNIFF→REQ] {request.method} {url}")
                 if request.post_data:
-                    log(f"  [SNIFF→REQ] body={request.post_data!r}")
+                    # 민감 정보 노출 방지: POST body는 200자로 제한
+                    log(f"  [SNIFF→REQ] body={request.post_data[:200]!r}")
 
         _FULL_BODY_KEYWORDS = (
             "attendance_items",
