@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 
 _BASE_URL = "https://canvas.ssu.ac.kr"
 
@@ -82,6 +83,31 @@ class LectureItem:
         이 판정은 URL 패턴만으로 수행되며, 실제 추출 실패는 별도 경로에서 처리.
         """
         return self.is_video and "learningx" not in self.full_url
+
+    def expected_paths(self, download_dir: str | Path, course_long_name: str) -> tuple[Path, Path]:
+        """다운로드 규칙 계산에 필요한 (mp4, mp3) 경로를 반환한다.
+
+        경로 구조 `과목명/N주차/강의명.mp4`는 downloader.make_filepath가 단일 진입점으로
+        유지하되, 호출 쪽 레이어에서 import 중복을 없애기 위해 모델 메서드로 래핑한다.
+        """
+        from src.downloader.video_downloader import make_filepath
+
+        mp4_rel = make_filepath(course_long_name, self.week_label, self.title)
+        mp4 = (Path(download_dir) / mp4_rel).resolve()
+        mp3 = mp4.with_suffix(".mp3")
+        return mp4, mp3
+
+    def file_present(self, download_dir: str | Path, course_long_name: str, rule: str) -> bool:
+        """DOWNLOAD_RULE에 따라 기대되는 파일이 모두 존재하는지 확인한다."""
+        mp4, mp3 = self.expected_paths(download_dir, course_long_name)
+        if rule == "video":
+            return mp4.exists()
+        if rule == "audio":
+            return mp3.exists()
+        if rule == "both":
+            return mp4.exists() and mp3.exists()
+        # 규칙 미설정 — 둘 중 하나만 있어도 present 간주
+        return mp4.exists() or mp3.exists()
 
 
 @dataclass

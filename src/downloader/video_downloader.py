@@ -35,27 +35,87 @@ _POLL_INTERVAL_SEC = 0.5  # 폴링 간격 (초)
 _ALLOWED_SCHEMES = {"https", "http"}
 _DEFAULT_ALLOWED_HOSTS_SUFFIX = (".ssu.ac.kr", ".commonscdn.com", ".commonscdn.net")
 
+# DOWNLOAD_EXTRA_HOSTS에서 명시적으로 차단하는 공인 suffix — 운영자 실수로 TLD/eTLD를
+# 입력해 전 인터넷이 허용되지 않도록 한다. 필요 시 docs/project-patterns.md에 추가.
+_EXTRA_HOSTS_BLOCKLIST = frozenset(
+    {
+        ".com", ".net", ".org", ".io", ".co", ".kr", ".ac.kr", ".co.kr", ".or.kr", ".go.kr",
+        ".jp", ".co.jp", ".cn", ".com.cn", ".uk", ".co.uk", ".de", ".fr", ".us",
+    }
+)
+
+# 캐시 — 프로세스 생존 중 동일한 env 값에 대해 경고를 한 번만 출력한다.
+_extra_hosts_cache: tuple[str, str, tuple[str, ...]] | None = None
+
+
+def _parse_extra_hosts(extra_raw: str) -> tuple[str, ...]:
+    """DOWNLOAD_EXTRA_HOSTS 문자열을 검증된 suffix 튜플로 파싱한다.
+
+    거부 규칙:
+    - 빈 라벨, 와일드카드(`*`), IP 패턴 거부
+    - 최소 2개 라벨 강제 (`a.b` 최소, `com` 같은 단일 라벨 차단)
+    - 공인 TLD/eTLD 블록리스트 차단
+    - 부적합 입력은 경고 로그와 함께 스킵 — 프로세스는 계속 진행
+    """
+    if not extra_raw.strip():
+        return ()
+
+    extras: list[str] = []
+    for item in extra_raw.split(","):
+        host = item.strip().lower()
+        if not host:
+            continue
+        if "*" in host or any(c.isspace() for c in host):
+            _dl_log.warning("DOWNLOAD_EXTRA_HOSTS: 잘못된 항목 스킵 (와일드카드/공백): %r", host)
+            continue
+        # IP 형태 거부 (숫자.숫자 패턴)
+        label_tokens = host.lstrip(".").split(".")
+        if label_tokens and all(tok.isdigit() for tok in label_tokens if tok):
+            _dl_log.warning("DOWNLOAD_EXTRA_HOSTS: IP 형식 거부: %r", host)
+            continue
+        if not host.startswith("."):
+            host = "." + host
+        # 빈 라벨 검출 (".." 또는 ".foo..bar")
+        if any(not tok for tok in host[1:].split(".")):
+            _dl_log.warning("DOWNLOAD_EXTRA_HOSTS: 빈 라벨 포함 항목 거부: %r", host)
+            continue
+        # 최소 2 라벨 강제 (e.g., ".foo.bar" OK, ".com" 거부)
+        label_count = host[1:].count(".") + 1
+        if label_count < 2:
+            _dl_log.warning("DOWNLOAD_EXTRA_HOSTS: 단일 라벨 거부(최소 2 라벨 필요): %r", host)
+            continue
+        # 공인 TLD/eTLD 블록리스트
+        if host in _EXTRA_HOSTS_BLOCKLIST:
+            _dl_log.warning("DOWNLOAD_EXTRA_HOSTS: 공인 TLD/eTLD 거부: %r", host)
+            continue
+        extras.append(host)
+    return tuple(extras)
+
 
 def _allowed_hosts_suffix() -> tuple[str, ...]:
     """기본 허용 목록 + DOWNLOAD_EXTRA_HOSTS env 오버라이드를 합친 튜플.
 
     env 값 예시: ".cdn.example.com,.media.foo.net" (쉼표 구분, 리딩 dot 권장).
     알려지지 않은 새 CDN이 등장했을 때 재배포 없이 대응하기 위한 비상 출구.
+
+    SEC-001 방어: `_parse_extra_hosts`에서 TLD/eTLD/단일 라벨/빈 라벨/와일드카드/IP를 거부한다.
+    동일 env 값에 대해 최초 호출 시 최종 적용 suffix를 INFO 로그로 남겨 운영자 가시화.
     """
+    global _extra_hosts_cache
+
     import os
 
-    extra_raw = os.getenv("DOWNLOAD_EXTRA_HOSTS", "").strip()
-    if not extra_raw:
-        return _DEFAULT_ALLOWED_HOSTS_SUFFIX
-    extras: list[str] = []
-    for item in extra_raw.split(","):
-        host = item.strip()
-        if not host:
-            continue
-        if not host.startswith("."):
-            host = "." + host
-        extras.append(host)
-    return _DEFAULT_ALLOWED_HOSTS_SUFFIX + tuple(extras)
+    extra_raw = os.getenv("DOWNLOAD_EXTRA_HOSTS", "")
+    cache_key = extra_raw
+    if _extra_hosts_cache is not None and _extra_hosts_cache[0] == cache_key:
+        return _extra_hosts_cache[2]
+
+    parsed = _parse_extra_hosts(extra_raw)
+    final = _DEFAULT_ALLOWED_HOSTS_SUFFIX + parsed
+    _extra_hosts_cache = (cache_key, extra_raw, final)
+    if parsed:
+        _dl_log.info("DOWNLOAD_EXTRA_HOSTS 적용: %s (최종 허용=%s)", parsed, final)
+    return final
 
 
 def _validate_media_url(url: str) -> None:

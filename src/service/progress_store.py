@@ -27,6 +27,7 @@ v1 → v2 자동 마이그레이션은 load 시점에 수행된다.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -95,18 +96,43 @@ class ProgressStore:
 
     # ── 저장 ─────────────────────────────────────────────────
     def save(self) -> None:
+        """원자적으로 auto_progress.json을 교체한다.
+
+        SEC-005: 임시 파일을 `os.open(..., 0o600)`으로 생성해 POSIX umask와 관계없이
+        처음부터 소유자 전용 권한을 부여한다. `replace` 이후에도 동일 권한 유지.
+        Windows는 `os.open` mode가 제한적이지만 파일 핸들은 정상 생성됨.
+        """
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "version": 2,
             "entries": {url: asdict(entry) for url, entry in self.entries.items()},
         }
+        serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-        tmp.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+
+        # O_CREAT|O_WRONLY|O_TRUNC + 0o600 — POSIX에서는 mode 적용, Windows에서는 무시됨
+        flags = os.O_CREAT | os.O_WRONLY | os.O_TRUNC
+        fd = os.open(str(tmp), flags, 0o600)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(serialized)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError:
+                    pass  # 일부 FS에서 fsync 미지원
+        except Exception:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
         tmp.replace(self.path)
+        # POSIX: O_CREAT 시점에 이미 0o600. Windows: 아래 chmod는 noop이지만 try로 감쌈.
         try:
             self.path.chmod(0o600)
         except OSError:
-            pass  # Windows에서는 chmod 미지원
+            pass
 
     # ── 조회 ─────────────────────────────────────────────────
     def get(self, url: str) -> ProgressEntry | None:
@@ -140,6 +166,18 @@ class ProgressStore:
     def mark_played(self, url: str) -> None:
         e = self.entries.setdefault(url, ProgressEntry())
         e.played = True
+        e.ts = self._now()
+
+    def mark_incomplete(self, url: str) -> None:
+        """LMS가 해당 항목을 다시 미완료로 바꾼 경우 store의 played 상태를 해제한다.
+
+        downloaded도 None(미확인)으로 되돌려 다음 사이클에 풀 파이프라인으로 재진입하게 한다.
+        """
+        e = self.entries.get(url)
+        if e is None:
+            return
+        e.played = False
+        e.downloaded = None
         e.ts = self._now()
 
     def mark_unsupported(self, url: str, reason: str | None = None) -> None:

@@ -8,7 +8,7 @@ run_download 및 관련 레이어가 성공/실패 상태를 구조화된 형태
 from dataclasses import dataclass
 from pathlib import Path
 
-# ── 실패 사유 ─────────────────────────────────────────────
+# ── 다운로드 실패 사유 ─────────────────────────────────────
 REASON_UNSUPPORTED = "unsupported"                # learningx 등 구조적 다운로드 불가
 REASON_URL_EXTRACT_FAILED = "url_extract_failed"  # mp4 URL 추출 실패 (HLS 전용 플레이어 등)
 REASON_SSRF_BLOCKED = "ssrf_blocked"              # 허용 호스트/프로토콜 위반
@@ -16,6 +16,10 @@ REASON_NETWORK = "network"                        # 타임아웃, 연결 오류,
 REASON_PATH_INVALID = "path_invalid"              # base_dir 벗어난 경로
 REASON_MP3_FAILED = "mp3_convert_failed"          # ffmpeg 변환 실패
 REASON_UNKNOWN = "unknown"                        # 분류 불가
+
+# ── 재생/파이프라인 사유 (PlayResult 전용) ──────────────
+REASON_PLAY_FAILED = "play_failed"                # 3회 재시도 후 재생 실패
+REASON_STOPPED = "stopped"                        # 사용자 중단 신호
 
 
 @dataclass
