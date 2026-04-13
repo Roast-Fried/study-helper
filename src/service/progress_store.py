@@ -27,12 +27,15 @@ v1 → v2 자동 마이그레이션은 load 시점에 수행된다.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 from src.config import KST
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -110,8 +113,18 @@ class ProgressStore:
         serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
 
-        # O_CREAT|O_WRONLY|O_TRUNC + 0o600 — POSIX에서는 mode 적용, Windows에서는 무시됨
-        flags = os.O_CREAT | os.O_WRONLY | os.O_TRUNC
+        # SEC-102: O_EXCL로 기존 파일/심볼릭 링크 거부, POSIX에서는 O_NOFOLLOW로 심볼릭 링크
+        # follow 차단. 레이스/TOCTOU 공격으로 다른 파일이 truncate 되는 경로를 없앤다.
+        # 실행 재시도 대비해 사전에 stale tmp 정리.
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+        flags = os.O_CREAT | os.O_WRONLY | os.O_TRUNC | os.O_EXCL
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
         fd = os.open(str(tmp), flags, 0o600)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -172,9 +185,11 @@ class ProgressStore:
         """LMS가 해당 항목을 다시 미완료로 바꾼 경우 store의 played 상태를 해제한다.
 
         downloaded도 None(미확인)으로 되돌려 다음 사이클에 풀 파이프라인으로 재진입하게 한다.
+        ARCH-013: entry None은 "예상 밖 호출"이므로 진단용 warning을 남긴다.
         """
         e = self.entries.get(url)
         if e is None:
+            _log.warning("mark_incomplete: 추적되지 않는 URL — url=%s", url)
             return
         e.played = False
         e.downloaded = None

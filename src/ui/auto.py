@@ -9,6 +9,7 @@ import asyncio
 import sys
 from dataclasses import dataclass
 from datetime import datetime
+from typing import TYPE_CHECKING, NamedTuple
 
 from rich.console import Console
 from rich.panel import Panel
@@ -16,6 +17,7 @@ from rich.prompt import Prompt
 from rich.text import Text
 
 from src.config import KST, Config, get_data_path
+from src.downloader.paths import expected_paths, file_present
 from src.downloader.result import REASON_PLAY_FAILED, REASON_STOPPED, REASON_UNSUPPORTED
 from src.logger import get_logger
 from src.service.progress_store import ProgressStore
@@ -26,6 +28,10 @@ from src.service.scheduler import (
     next_schedule_time,
     parse_schedule_input,
 )
+
+if TYPE_CHECKING:
+    from src.scraper.course_scraper import CourseScraper
+    from src.scraper.models import Course, CourseDetail, LectureItem
 
 console = Console()
 _log = get_logger("auto")
@@ -48,6 +54,14 @@ class PlayResult:
     downloaded: bool = False
     downloadable: bool = True
     reason: str | None = None
+
+
+class DownloadStepResult(NamedTuple):
+    """`_run_download_step` 반환 — `(bool, str|None, bool)` 매직 튜플 대체 (TYPE-005)."""
+
+    ok: bool
+    reason: str | None
+    downloadable: bool
 
 # 재생 재시도 설정
 _MAX_PLAY_RETRIES = 3
@@ -73,9 +87,9 @@ def _save_store(store: ProgressStore) -> None:
         _log.warning("auto_progress.json 저장 실패: %s", e)
 
 
-def _is_file_present(course, lec, rule: str) -> bool:
+def _is_file_present(course: "Course", lec: "LectureItem", rule: str) -> bool:
     """DOWNLOAD_RULE에 따라 기대되는 파일이 모두 존재하는지 확인한다."""
-    return lec.file_present(Config.get_download_dir(), course.long_name, rule)
+    return file_present(Config.get_download_dir(), course.long_name, lec, rule)
 
 
 def _check_auto_prerequisites() -> list[str]:
@@ -104,7 +118,11 @@ def _configure_schedule() -> list[int]:
         console.print("  [red]0~23 사이의 숫자를 쉼표로 구분해 입력하세요.[/red]")
 
 
-async def run_auto_mode(scraper, courses, details) -> None:
+async def run_auto_mode(
+    scraper: "CourseScraper",
+    courses: list["Course"],
+    details: list["CourseDetail | None"],
+) -> None:
     """
     자동 모드 진입점.
 
@@ -383,8 +401,11 @@ async def run_auto_mode(scraper, courses, details) -> None:
                 _apply_play_result(store, lec.full_url, result)
                 _save_store(store)
 
-            # ── 다운로드 누락 점검 (파일시스템 기준 재검증) ─────────
-            _reconcile_with_filesystem(courses, details, store)
+            # ── 다운로드 누락 점검 (파일시스템 기준 재검증, CQS 분리) ─────
+            _reconcile_store_with_filesystem(courses, details, store)
+            _save_store(store)
+            missing_entries = _list_missing_entries(courses, details)
+            _notify_download_gaps(missing_entries)
 
             # STT 모델 메모리 해제 (다음 사이클까지 필요 없음)
             try:
@@ -419,7 +440,12 @@ async def run_auto_mode(scraper, courses, details) -> None:
     console.print()
 
 
-async def _process_lecture(scraper, course, lec, stop_event: asyncio.Event) -> PlayResult:
+async def _process_lecture(
+    scraper: "CourseScraper",
+    course: "Course",
+    lec: "LectureItem",
+    stop_event: asyncio.Event,
+) -> PlayResult:
     """
     단일 강의 풀 파이프라인: 재생 → 다운로드 → STT → AI 요약 → 텔레그램 알림.
     오류 발생 시 텔레그램으로 알림을 보내고 다음 강의로 넘어간다.
@@ -467,7 +493,10 @@ async def _process_lecture(scraper, course, lec, stop_event: asyncio.Event) -> P
             _log.warning("재생 실패 (%d/%d): %s — %s", play_attempt, _MAX_PLAY_RETRIES, label, last_err_msg)
             console.print(f"  [yellow]  → {last_err_msg} ({play_attempt}/{_MAX_PLAY_RETRIES})[/yellow]")
         except Exception as e:
-            last_err_msg = f"재생 실패: {e}"
+            # SEC-101: 원본 예외 str에는 세션 토큰 포함 URL이 섞일 수 있어
+            # 사용자/텔레그램 노출용 메시지는 타입명만 쓴다. 상세는 study_helper.log에만.
+            exc_type = type(e).__name__
+            last_err_msg = f"재생 실패: {exc_type}"
             _log.error("재생 예외 (%d/%d): %s — %s", play_attempt, _MAX_PLAY_RETRIES, label, e, exc_info=True)
             console.print(f"  [red]  → {last_err_msg} ({play_attempt}/{_MAX_PLAY_RETRIES})[/red]")
 
@@ -484,7 +513,8 @@ async def _process_lecture(scraper, course, lec, stop_event: asyncio.Event) -> P
         return PlayResult(played=True, downloaded=False, reason=REASON_STOPPED)
 
     # ── 다운로드 ──────────────────────────────────────────────────
-    download_ok, reason, downloadable = await _run_download_step(scraper, course, lec, label)
+    step = await _run_download_step(scraper, course, lec, label)
+    download_ok, reason, downloadable = step.ok, step.reason, step.downloadable
     if download_ok:
         console.print(f"  [bold green]  → {label} 완료[/bold green]")
         console.print()
@@ -496,7 +526,11 @@ async def _process_lecture(scraper, course, lec, stop_event: asyncio.Event) -> P
     )
 
 
-async def _process_download_only(scraper, course, lec) -> PlayResult:
+async def _process_download_only(
+    scraper: "CourseScraper",
+    course: "Course",
+    lec: "LectureItem",
+) -> PlayResult:
     """재생 스킵, 다운로드만 재시도하는 fast-path.
 
     store에 재생 완료로 기록되어 있고 파일만 누락된 경우 사용된다.
@@ -510,7 +544,8 @@ async def _process_download_only(scraper, course, lec) -> PlayResult:
     except Exception as e:
         _log.warning("세션 확인 오류: %s (계속 시도)", e)
 
-    download_ok, reason, downloadable = await _run_download_step(scraper, course, lec, label)
+    step = await _run_download_step(scraper, course, lec, label)
+    download_ok, reason, downloadable = step.ok, step.reason, step.downloadable
     return PlayResult(
         played=True,  # 이미 완료된 상태라는 전제
         downloaded=download_ok,
@@ -519,8 +554,13 @@ async def _process_download_only(scraper, course, lec) -> PlayResult:
     )
 
 
-async def _run_download_step(scraper, course, lec, label: str) -> tuple[bool, str | None, bool]:
-    """run_download를 호출하고 (ok, reason, downloadable) 튜플로 정규화해 반환한다."""
+async def _run_download_step(
+    scraper: "CourseScraper",
+    course: "Course",
+    lec: "LectureItem",
+    label: str,
+) -> DownloadStepResult:
+    """`run_download`를 호출하고 결과를 `DownloadStepResult`로 정규화해 반환한다."""
     from src.ui.download import run_download
 
     rule = Config.DOWNLOAD_RULE or "both"
@@ -537,17 +577,17 @@ async def _run_download_step(scraper, course, lec, label: str) -> tuple[bool, st
         _log.error("다운로드 예외: %s — %s", label, e, exc_info=True)
         console.print(f"  [red]  → 다운로드 실패: {exc_type}[/red]")
         _tg_error_notify(course, lec, f"다운로드 실패: {exc_type}")
-        return False, f"exception:{exc_type}", True
+        return DownloadStepResult(ok=False, reason=f"exception:{exc_type}", downloadable=True)
 
     if result.ok:
         _log.info("다운로드 완료: %s", label)
         console.print("  [dim]  → 다운로드 완료[/dim]")
-        return True, None, True
+        return DownloadStepResult(ok=True, reason=None, downloadable=True)
 
     _log.warning("다운로드 실패: %s — reason=%s", label, result.reason)
     console.print(f"  [yellow]  → 다운로드 실패: {label} (사유={result.reason})[/yellow]")
     downloadable = result.reason != REASON_UNSUPPORTED
-    return False, result.reason, downloadable
+    return DownloadStepResult(ok=False, reason=result.reason, downloadable=downloadable)
 
 
 def _apply_play_result(store: ProgressStore, url: str, result: PlayResult) -> None:
@@ -563,68 +603,92 @@ def _apply_play_result(store: ProgressStore, url: str, result: PlayResult) -> No
         store.mark_download_failed(url, reason=result.reason or "unknown")
 
 
-def _reconcile_with_filesystem(
-    courses, details, store: ProgressStore | None = None
-) -> list[tuple]:
-    """시청 완료된 강의를 파일시스템과 대조해 누락/확정을 분리한다.
+# ── 다운로드 누락 점검 — Command/Query/Side-effect 분리 (ARCH-011) ──
+#
+# 세 가지 책임을 각자 독립된 함수로 분리한다:
+#   1. reconcile_store_with_filesystem  — Command. 파일시스템을 관찰해 store를 정정
+#   2. list_missing_entries             — Query.   누락 목록만 반환(부수효과 없음)
+#   3. _notify_download_gaps            — Side-effect. 콘솔/로그/텔레그램 발송
+#
+# `auto.py` 루프는 이 세 함수를 순서대로 호출해서 예전과 동일한 결과를 얻는다.
+# `recover_pipeline.collect_missing`은 독립된 공용 수집기 — TUI/CLI recover용. 이쪽과
+# `list_missing_entries`는 의도적으로 별도 유지한다(auto 루프는 튜플 포맷이 필요하고
+# recover_pipeline은 MissingItem dataclass가 필요).
 
-    Command/Query 혼재 경고: store가 주어지면 파일 존재 확인에 따라
-    `mark_unsupported`/`mark_download_confirmed_from_filesystem`을 호출해 side-effect가
-    발생한다. store가 None이면 순수 조회로만 동작한다. 반환값은 누락 튜플 목록
-    (course_long_name, week_label, title, missing_kind) — 호출자가 추가 복구/알림 루프에 사용.
-    """
+
+_MissingTuple = tuple[str, str, str, str]  # (course_long_name, week_label, title, kind)
+
+
+def _reconcile_store_with_filesystem(
+    courses: list["Course"],
+    details: list["CourseDetail | None"],
+    store: ProgressStore,
+) -> None:
+    """파일시스템 관찰 결과를 store에 반영한다 (Command)."""
     download_dir = Config.get_download_dir()
     rule = Config.DOWNLOAD_RULE or "both"
-    missing: list[tuple] = []
-
     for course, detail in zip(courses, details, strict=False):
         if detail is None:
             continue
         for lec in detail.all_video_lectures:
             if lec.completion != "completed":
                 continue
-            # 다운로드 불가능한 항목(learningx 등) 제외
             if not lec.is_downloadable:
-                if store is not None:
-                    store.mark_unsupported(lec.full_url, reason=REASON_UNSUPPORTED)
+                store.mark_unsupported(lec.full_url, reason=REASON_UNSUPPORTED)
                 continue
-
-            mp4_path, mp3_path = lec.expected_paths(download_dir, course.long_name)
-            has_video = mp4_path.exists()
-            has_audio = mp3_path.exists()
-            present = lec.file_present(download_dir, course.long_name, rule)
-            if store is not None and present:
+            if file_present(download_dir, course.long_name, lec, rule):
                 store.mark_download_confirmed_from_filesystem(lec.full_url)
 
+
+def _list_missing_entries(
+    courses: list["Course"],
+    details: list["CourseDetail | None"],
+) -> list[_MissingTuple]:
+    """시청 완료된 강의 중 파일이 누락된 항목 튜플 목록을 반환한다 (Query, 부수효과 없음)."""
+    download_dir = Config.get_download_dir()
+    rule = Config.DOWNLOAD_RULE or "both"
+    missing: list[_MissingTuple] = []
+    for course, detail in zip(courses, details, strict=False):
+        if detail is None:
+            continue
+        for lec in detail.all_video_lectures:
+            if lec.completion != "completed" or not lec.is_downloadable:
+                continue
+            mp4_path, mp3_path = expected_paths(download_dir, course.long_name, lec)
+            has_video = mp4_path.exists()
+            has_audio = mp3_path.exists()
             if rule == "video" and not has_video:
                 missing.append((course.long_name, lec.week_label, lec.title, "mp4"))
             elif rule == "audio" and not has_audio:
                 missing.append((course.long_name, lec.week_label, lec.title, "mp3"))
             elif rule == "both" and not (has_video and has_audio):
                 missing.append((course.long_name, lec.week_label, lec.title, "mp4+mp3"))
-
-    if missing:
-        console.print()
-        console.print(f"  [yellow]다운로드 누락 {len(missing)}건 감지:[/yellow]")
-        for course_name, week, title, ftype in missing[:10]:
-            console.print(f"  [dim]  → [{course_name}] {week} {title} ({ftype})[/dim]")
-        if len(missing) > 10:
-            console.print(f"  [dim]  → ... 외 {len(missing) - 10}건[/dim]")
-        _log.warning("다운로드 누락 %d건 감지 (rule=%s)", len(missing), rule)
-        for course_name, week, title, ftype in missing:
-            _log.warning("  · [%s] %s %s (누락=%s)", course_name, week, title, ftype)
-
-        # 텔레그램 알림
-        creds = Config.get_telegram_credentials()
-        if creds:
-            from src.notifier.telegram_notifier import notify_download_gaps
-
-            notify_download_gaps(creds[0], creds[1], missing)
-
     return missing
 
 
-def _tg_error_notify(course, lec, error_msg: str) -> None:
+def _notify_download_gaps(missing: list[_MissingTuple]) -> None:
+    """콘솔 출력 + 로그 기록 + 텔레그램 알림 (Side-effect)."""
+    if not missing:
+        return
+    rule = Config.DOWNLOAD_RULE or "both"
+    console.print()
+    console.print(f"  [yellow]다운로드 누락 {len(missing)}건 감지:[/yellow]")
+    for course_name, week, title, ftype in missing[:10]:
+        console.print(f"  [dim]  → [{course_name}] {week} {title} ({ftype})[/dim]")
+    if len(missing) > 10:
+        console.print(f"  [dim]  → ... 외 {len(missing) - 10}건[/dim]")
+    _log.warning("다운로드 누락 %d건 감지 (rule=%s)", len(missing), rule)
+    for course_name, week, title, ftype in missing:
+        _log.warning("  · [%s] %s %s (누락=%s)", course_name, week, title, ftype)
+
+    creds = Config.get_telegram_credentials()
+    if creds:
+        from src.notifier.telegram_notifier import notify_download_gaps
+
+        notify_download_gaps(creds[0], creds[1], missing)
+
+
+def _tg_error_notify(course: "Course", lec: "LectureItem", error_msg: str) -> None:
     """자동 모드 처리 오류를 텔레그램으로 알린다."""
     creds = Config.get_telegram_credentials()
     if not creds:

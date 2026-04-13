@@ -37,6 +37,7 @@ _DEFAULT_ALLOWED_HOSTS_SUFFIX = (".ssu.ac.kr", ".commonscdn.com", ".commonscdn.n
 
 # DOWNLOAD_EXTRA_HOSTS에서 명시적으로 차단하는 공인 suffix — 운영자 실수로 TLD/eTLD를
 # 입력해 전 인터넷이 허용되지 않도록 한다. 필요 시 docs/project-patterns.md에 추가.
+# SEC-103: IDN TLD(`.xn--*`)는 PSL 검증이 없으므로 아예 패턴으로 차단한다.
 _EXTRA_HOSTS_BLOCKLIST = frozenset(
     {
         ".com", ".net", ".org", ".io", ".co", ".kr", ".ac.kr", ".co.kr", ".or.kr", ".go.kr",
@@ -87,6 +88,11 @@ def _parse_extra_hosts(extra_raw: str) -> tuple[str, ...]:
         # 공인 TLD/eTLD 블록리스트
         if host in _EXTRA_HOSTS_BLOCKLIST:
             _dl_log.warning("DOWNLOAD_EXTRA_HOSTS: 공인 TLD/eTLD 거부: %r", host)
+            continue
+        # SEC-103: IDN(xn-- 접두사) 라벨 포함 차단 — PSL 검증 없이 ccTLD 전부 허용되는
+        # 위험 방지. 필요 시 명시적 allow-list를 별도로 관리.
+        if any(tok.startswith("xn--") for tok in host[1:].split(".")):
+            _dl_log.warning("DOWNLOAD_EXTRA_HOSTS: IDN(xn--) 라벨 거부: %r", host)
             continue
         extras.append(host)
     return tuple(extras)
@@ -146,7 +152,7 @@ async def extract_video_url(page: Page, lecture_url: str) -> str | None:
     Plan B: Network 요청 가로채기 — mp4 URL이 포함된 요청 캡처 (readystream 등)
     """
 
-    captured: dict = {"url": None}
+    captured: dict[str, str | None] = {"url": None}
     _bg_task: asyncio.Task | None = None
     _content_parsed = False
     _observed_hls = False  # m3u8/HLS URL 감지 시 실패 원인 분류에 사용
@@ -357,7 +363,7 @@ async def extract_video_url(page: Page, lecture_url: str) -> str | None:
 
 
 async def download_video_with_browser(
-    page,
+    page: Page,
     url: str,
     save_path: Path,
     on_progress: Callable[[int, int], None] | None = None,
@@ -403,7 +409,7 @@ def download_video(
     url: str,
     save_path: Path,
     on_progress: Callable[[int, int], None] | None = None,
-    cookies: dict | None = None,
+    cookies: dict[str, str] | None = None,
     referer: str | None = None,
 ) -> Path:
     """
@@ -449,10 +455,10 @@ def _stream_download(
     save_path: Path,
     on_progress: Callable[[int, int], None] | None,
     attempt: int,
-    cookies: dict | None = None,
+    cookies: dict[str, str] | None = None,
     referer: str | None = None,
-):
-    headers = {"Referer": referer} if referer else {}
+) -> None:
+    headers: dict[str, str] = {"Referer": referer} if referer else {}
     existing_size = 0
 
     # 재시도 시 기존 파일이 있으면 이어받기 시도
@@ -463,7 +469,7 @@ def _stream_download(
 
     response = requests.get(url, stream=True, timeout=_TIMEOUT, cookies=cookies, headers=headers)
 
-    def _safe_content_length(resp) -> int:
+    def _safe_content_length(resp: requests.Response) -> int:
         try:
             return int(resp.headers.get("content-length", 0))
         except (ValueError, TypeError):
