@@ -1,0 +1,76 @@
+version: '3'
+
+# dotenv: ['.env']  # .env는 Python 내부에서 로드 (특수문자 호환)
+
+vars:
+  VENV: '{{.ROOT_DIR}}/.venv'
+  PY: '{{.VENV}}/Scripts/python.exe'
+  BIN: '{{.VENV}}/Scripts'
+
+tasks:
+
+  default:
+    desc: 사용 가능한 태스크 목록 표시
+    silent: true
+    cmds:
+      - echo "Available tasks:"
+      - echo "  run          CUI 모드 실행 (로컬)"
+      - echo "  api          API 서버 실행 (Electron 연동)"
+      - echo "  docker       Docker CUI 모드 실행"
+      - echo "  lint         ruff 린트 검사"
+      - echo "  fmt          ruff 포맷팅"
+      - echo "  test         pytest 실행"
+      - echo "  typecheck    py_compile 문법 검사"
+      - echo "  check        lint + test 한번에"
+      - echo "  install      의존성 설치"
+      - echo "  playwright   Playwright 브라우저 설치"
+
+  # ── 실행 ──────────────────────────────────────────────────────
+  run:
+    desc: CUI 모드 실행 (로컬)
+    interactive: true
+    cmds:
+      - cmd: '{{.PY}} -m src.main'
+        platforms: [linux, darwin]
+      - cmd: cmd /C "{{.PY}} -m src.main"
+        platforms: [windows]
+
+  api:
+    desc: API 서버 실행 (Electron 연동)
+    cmd: '{{.PY}} -m src.api.server'
+
+  docker:
+    desc: Docker CUI 모드 실행
+    cmd: docker compose run --rm study-helper
+
+  # ── 개발 ──────────────────────────────────────────────────────
+  lint:
+    desc: ruff 린트 검사
+    cmd: '{{.BIN}}/ruff check src/'
+
+  fmt:
+    desc: ruff 포맷팅
+    cmd: '{{.BIN}}/ruff format src/'
+
+  test:
+    desc: pytest 실행
+    cmd: '{{.BIN}}/pytest tests/ -v --tb=short'
+
+  typecheck:
+    desc: py_compile 문법 검사 (전체)
+    cmd: '{{.PY}} -c "import pathlib,py_compile;[py_compile.compile(str(f),doraise=True) for f in pathlib.Path(''src'').rglob(''*.py'')]"'
+
+  check:
+    desc: lint + test 한번에
+    cmds:
+      - task: lint
+      - task: test
+
+  # ── 설치 ──────────────────────────────────────────────────────
+  install:
+    desc: 의존성 설치
+    cmd: '{{.BIN}}/pip install -e ".[dev]"'
+
+  playwright:
+    desc: Playwright 브라우저 설치
+    cmd: '{{.BIN}}/playwright install chromium'

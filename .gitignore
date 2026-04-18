@@ -37,6 +37,9 @@ node_modules/
 .vscode/
 *.swp
 
+# Claude Code local config (per-developer, not shared)
+.claude/
+
 # Planning artifacts
 plan.md
 plan-*.md
