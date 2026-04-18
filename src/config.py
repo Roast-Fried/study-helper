@@ -59,21 +59,33 @@ def _read_version() -> str:
 APP_VERSION = _read_version()
 
 
+def _is_docker_with_data_volume() -> bool:
+    """Docker 컨테이너 내부이면서 /data 볼륨이 마운트된 경우에만 True.
+
+    Windows/macOS에서 우연히 드라이브 루트의 \\data 폴더(예: D:\\data)가 있어도
+    `Path("/data")`가 해당 경로를 가리켜 오탐하는 문제를 방지하기 위해,
+    Linux 플랫폼 + `/.dockerenv` 파일 존재 + `/data` 디렉토리 존재를 모두 검증한다.
+    """
+    if sys.platform != "linux":
+        return False
+    return Path("/.dockerenv").exists() and Path("/data").is_dir()
+
+
 def get_data_path(filename: str) -> Path:
     """데이터 파일 경로를 반환한다.
 
     우선순위:
     1. STUDY_HELPER_DATA_DIR 환경변수 (Electron 앱이 설정)
-    2. Docker 환경: /data
-    3. 로컬: data/ (프로젝트 루트 기준)
+    2. Docker 컨테이너(/data 마운트): /data
+    3. 로컬: 프로젝트 루트/data (CWD 무관)
     """
     env_dir = os.getenv("STUDY_HELPER_DATA_DIR", "")
     if env_dir:
         base = Path(env_dir)
-    elif Path("/data").exists():
+    elif _is_docker_with_data_volume():
         base = Path("/data")
     else:
-        base = Path("data")
+        base = Path(__file__).resolve().parent.parent / "data"
     base.mkdir(parents=True, exist_ok=True)
     return base / filename
 

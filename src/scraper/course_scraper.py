@@ -250,10 +250,15 @@ class CourseScraper:
 
         async def _fetch_one(idx: int, course: Course):
             async with sem:
-                max_retries = 2
+                # B6: 초기 warmup 중 Playwright driver가 죽을 수 있으므로 재시도 + 지수 백오프.
+                # `_context.new_page()` 자체가 실패하는 경우도 여기서 캐치해 건너뛰지 않도록 한다.
+                max_retries = 3
                 for attempt in range(max_retries + 1):
-                    page = await self._context.new_page()
+                    page = None
                     try:
+                        if self._context is None:
+                            raise RuntimeError("BrowserContext가 None — 상위 루프에서 재시작 필요")
+                        page = await self._context.new_page()
                         results[idx] = await self._fetch_lectures_on(page, course)
                         break
                     except Exception as e:
@@ -268,7 +273,8 @@ class CourseScraper:
                             self._file_log.warning(
                                 "강의 로딩 실패 상세 — url=%s", course.lectures_url,
                             )
-                            await asyncio.sleep(1)
+                            # 지수 백오프: 1s, 2s, 4s — 첫 실패는 warmup, 이후는 실제 문제
+                            await asyncio.sleep(2 ** attempt)
                         else:
                             self._log(
                                 f"강의 로딩 실패 ({course.long_name}): [{err_type}] {e}",
@@ -279,10 +285,11 @@ class CourseScraper:
                             )
                             results[idx] = None
                     finally:
-                        try:
-                            await page.close()
-                        except Exception:
-                            self._file_log.warning("탭 닫기 실패 (%s)", course.long_name)
+                        if page is not None:
+                            try:
+                                await page.close()
+                            except Exception:
+                                self._file_log.warning("탭 닫기 실패 (%s)", course.long_name)
                 if on_complete:
                     on_complete()
 
