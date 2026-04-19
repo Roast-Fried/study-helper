@@ -220,10 +220,15 @@ class ProgressStore:
         e.ts = self._now()
 
     def mark_download_confirmed_from_filesystem(self, url: str) -> None:
-        """파일시스템 점검 결과 이미 파일이 존재할 때 사용."""
+        """파일시스템 점검 결과 이미 파일이 존재할 때 사용.
+
+        파일이 실제로 존재한다는 게 확정 증거이므로 이전에 기록돼 있던 실패
+        reason (예: suspicious_stub) 은 더 이상 유효하지 않아 함께 리셋한다.
+        """
         e = self.entries.setdefault(url, ProgressEntry())
         e.downloaded = True
         e.downloadable = True
+        e.reason = None
         if not e.ts:
             e.ts = self._now()
 
