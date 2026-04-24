@@ -300,6 +300,12 @@ class Config:
                 f.flush()
                 os.fsync(f.fileno())
             tmp_path.replace(env_path)
+            # SEC-001: .env 는 LMS 비밀번호·API 키·봇 토큰(암호화됨) 을 담으므로
+            # POSIX 에서는 0o600 강제. Windows 는 chmod 가 no-op 이며 OSError 시 무시.
+            try:
+                env_path.chmod(0o600)
+            except OSError:
+                pass
         except Exception:
             tmp_path.unlink(missing_ok=True)
             raise
