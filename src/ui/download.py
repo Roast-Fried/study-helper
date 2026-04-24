@@ -34,7 +34,7 @@ from src.downloader.result import (
     SSRFBlockedError,
     SuspiciousStubError,
 )
-from src.logger import get_error_logger
+from src.logger import get_error_logger, get_logger
 from src.ui._widgets import header_panel
 from src.util.url import safe_url
 
@@ -42,6 +42,7 @@ _MAX_URL_RETRIES = RetryPolicy.URL_EXTRACT
 _RETRY_WAIT = RetryPolicy.URL_RETRY_WAIT_SEC
 
 console = Console()
+_log = get_logger("ui.download")
 
 
 async def run_download(page, lec, course, audio_only: bool = False, both: bool = False) -> DownloadResult:
@@ -72,8 +73,18 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
 
     from src.notifier.telegram_dispatch import dispatch_if_configured
 
+    _log.info(
+        "다운로드 시작 — course=%r week=%r title=%r type=%s url=%s",
+        course.long_name, lec.week_label, lec.title, lec.lecture_type.value,
+        safe_url(lec.full_url),
+    )
+
     # 1. 구조적으로 다운로드 불가능한 항목 조기 감지 (learningx 등)
     if not lec.is_downloadable:
+        _log.warning(
+            "다운로드 실패 reason=%s — 구조적 미지원 (is_downloadable=False). course=%r title=%r type=%s",
+            REASON_UNSUPPORTED, course.long_name, lec.title, lec.lecture_type.value,
+        )
         console.print("  [yellow]다운로드 불가:[/yellow] 이 강의는 다운로드가 지원되지 않는 형식입니다.")
         from src.notifier.telegram_notifier import notify_download_unsupported
 
@@ -99,9 +110,20 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
             console.print(f"  [dim]영상 URL 추출 재시도 ({attempt}/{_MAX_URL_RETRIES})...[/dim]")
         last_extraction = await extract_video_url_detailed(page, lec.full_url)
         if last_extraction.url:
+            _log.info(
+                "URL 추출 성공 — attempt=%d/%d diag=%s",
+                attempt, _MAX_URL_RETRIES, last_extraction.diagnostics,
+            )
             video_url = last_extraction.url
             break
+        _log.warning(
+            "URL 추출 실패 — attempt=%d/%d reason=%s diag=%s",
+            attempt, _MAX_URL_RETRIES, last_extraction.reason, last_extraction.diagnostics,
+        )
         if is_no_retry_reason(last_extraction.reason):
+            _log.warning(
+                "URL 추출 재시도 건너뜀 (구조적 실패) — reason=%s", last_extraction.reason,
+            )
             console.print(
                 f"  [yellow]구조적 실패 ({last_extraction.reason}) — 재시도 건너뜀[/yellow]"
             )
@@ -114,6 +136,10 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
         # 세분화된 sub-reason 과 진단 컨텍스트를 그대로 progress_store/로그에 전달.
         extract_reason = (last_extraction.reason if last_extraction else None) or REASON_URL_EXTRACT_FAILED
         diag = last_extraction.diagnostics if last_extraction else {}
+        _log.error(
+            "다운로드 실패 reason=%s — URL 추출 3회 실패. course=%r title=%r url=%s diag=%s",
+            extract_reason, course.long_name, lec.title, safe_url(lec.full_url), diag,
+        )
         console.print(f"  [bold red]오류:[/bold red] 영상 URL 추출 실패 ({extract_reason}, 3회 시도)")
         logger, log_path = get_error_logger("download")
         logger.info("강의: %s", lec.title)
@@ -136,6 +162,10 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
     mp4_path = (Path(download_dir) / mp4_relpath).resolve()
     base_dir = Path(download_dir).resolve()
     if not mp4_path.is_relative_to(base_dir):
+        _log.error(
+            "다운로드 실패 reason=%s — 경로 이스케이프. mp4_path=%s base=%s course=%r title=%r",
+            REASON_PATH_INVALID, mp4_path, base_dir, course.long_name, lec.title,
+        )
         console.print("  [bold red]오류:[/bold red] 잘못된 다운로드 경로가 감지되었습니다.")
         return DownloadResult(ok=False, reason=REASON_PATH_INVALID)
 
@@ -168,23 +198,7 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
 
             await download_video_with_browser(page, video_url, mp4_path, on_progress=on_progress)
     except Exception as e:
-        console.print(f"  [bold red]다운로드 실패:[/bold red] {e}")
-        logger, log_path = get_error_logger("download")
-        logger.info("강의: %s", lec.title)
-        logger.info("URL: %s", safe_url(lec.full_url))
-        logger.info("영상 URL: %s", video_url)
-        logger.error("다운로드 실패: %s", e, exc_info=True)
-        console.print(f"  [dim]로그 저장: {log_path}[/dim]")
-        from src.notifier.telegram_notifier import notify_download_error
-
-        dispatch_if_configured(
-            notify_download_error,
-            course_name=course.long_name,
-            week_label=lec.week_label,
-            lecture_title=lec.title,
-        )
-
-        # 실패 사유 분류
+        # 실패 사유 분류 (로그와 반환에 동일하게 사용)
         if isinstance(e, SSRFBlockedError):
             reason = REASON_SSRF_BLOCKED
         elif isinstance(e, SuspiciousStubError):
@@ -198,6 +212,31 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
             reason = REASON_NETWORK
         else:
             reason = REASON_UNKNOWN
+
+        # 메인 로그 — grep 으로 빠르게 찾을 수 있는 요약 + traceback.
+        # PII 는 SensitiveFilter 가 handler 단에서 마스킹하므로 exc_info=True 안전.
+        _log.error(
+            "다운로드 실패 reason=%s exc=%s — course=%r title=%r url=%s video_url=%s: %s",
+            reason, type(e).__name__, course.long_name, lec.title,
+            safe_url(lec.full_url), safe_url(video_url), e,
+            exc_info=True,
+        )
+        console.print(f"  [bold red]다운로드 실패:[/bold red] {e}")
+        # 상세 error 전용 로그 (호환 유지) — 동일 내용을 별도 파일로도 남김.
+        err_logger, log_path = get_error_logger("download")
+        err_logger.info("강의: %s", lec.title)
+        err_logger.info("URL: %s", safe_url(lec.full_url))
+        err_logger.info("영상 URL: %s", safe_url(video_url))
+        err_logger.error("다운로드 실패: %s", e, exc_info=True)
+        console.print(f"  [dim]로그 저장: {log_path}[/dim]")
+        from src.notifier.telegram_notifier import notify_download_error
+
+        dispatch_if_configured(
+            notify_download_error,
+            course_name=course.long_name,
+            week_label=lec.week_label,
+            lecture_title=lec.title,
+        )
         return DownloadResult(ok=False, reason=reason)
 
     # 5-8. 후속 파이프라인 (mp3 변환 → STT → AI 요약 → 텔레그램 알림)

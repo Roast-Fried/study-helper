@@ -150,9 +150,14 @@ async def run_pipeline(
             if inspect.isawaitable(ret):
                 await ret
 
-    # SEC-005: stage_errors 에는 고정 에러 코드(타입명)만 노출한다.
-    # 원본 예외 메시지는 서버 로그에만 기록해 API 응답 leak 을 방지한다.
-    # traceback 은 exc_info=False 로 frame locals (API 키/토큰) 유출을 차단.
+    # SEC-005 + 추적성: stage_errors 에는 고정 에러 코드만 노출(API 응답 leak 차단).
+    # 로컬 로그(study_helper.log)에는 exc_info=True 로 traceback 기록 — SensitiveFilter
+    # 가 handler 단에서 PII 를 마스킹하므로 API 키/토큰 값은 로그에서도 차단된다.
+    # 로그로 원인 추적(변수 값, call stack) 하려면 traceback 이 필수.
+    _log.info(
+        "파이프라인 시작 — mp4=%s audio_only=%s both=%s stt=%s ai=%s tg=%s",
+        mp4_path, audio_only, both, stt_enabled, ai_enabled, bool(tg_token and tg_chat_id),
+    )
 
     # ── 1. mp3 변환 ──────────────────────────────────────────────
     if audio_only or both:
@@ -166,7 +171,7 @@ async def run_pipeline(
                 result.mp4_path = None
             await _emit(PipelineStage.CONVERT, 1.0, "mp3 변환 완료")
         except Exception as e:
-            _log.error("convert 단계 실패: %s: %s", type(e).__name__, e, exc_info=False)
+            _log.error("convert 단계 실패: %s: %s", type(e).__name__, e, exc_info=True)
             result.stage_errors["convert"] = type(e).__name__
             result.stage_messages["convert"] = f"{type(e).__name__}: {e}"
             result.success = False
@@ -189,7 +194,7 @@ async def run_pipeline(
             )
             await _emit(PipelineStage.TRANSCRIBE, 1.0, "STT 완료")
         except Exception as e:
-            _log.error("transcribe 단계 실패: %s: %s", type(e).__name__, e, exc_info=False)
+            _log.error("transcribe 단계 실패: %s: %s", type(e).__name__, e, exc_info=True)
             result.stage_errors["transcribe"] = type(e).__name__
             result.stage_messages["transcribe"] = f"{type(e).__name__}: {e}"
         finally:
@@ -226,7 +231,7 @@ async def run_pipeline(
                 )
                 await _emit(PipelineStage.SUMMARIZE, 1.0, "AI 요약 완료")
             except Exception as e:
-                _log.error("summarize 단계 실패: %s: %s", type(e).__name__, e, exc_info=False)
+                _log.error("summarize 단계 실패: %s: %s", type(e).__name__, e, exc_info=True)
                 result.stage_errors["summarize"] = type(e).__name__
                 result.stage_messages["summarize"] = f"{type(e).__name__}: {e}"
 
@@ -255,8 +260,13 @@ async def run_pipeline(
                 result.stage_errors["notify"] = "NOTIFY_FAILED"
                 result.stage_messages["notify"] = "Telegram 전송 실패 (토큰/Chat ID 확인 필요)"
         except Exception as e:
-            _log.error("notify 단계 실패: %s: %s", type(e).__name__, e, exc_info=False)
+            _log.error("notify 단계 실패: %s: %s", type(e).__name__, e, exc_info=True)
             result.stage_errors["notify"] = type(e).__name__
             result.stage_messages["notify"] = f"{type(e).__name__}: {e}"
 
+    _log.info(
+        "파이프라인 종료 — success=%s error=%r stages_failed=%s mp3=%s txt=%s summary=%s",
+        result.success, result.error, sorted(result.stage_errors.keys()),
+        bool(result.mp3_path), bool(result.txt_path), bool(result.summary_path),
+    )
     return result

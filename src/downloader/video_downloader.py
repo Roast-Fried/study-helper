@@ -535,6 +535,21 @@ def _stream_download(
             return 0
 
     try:
+        # 4xx/5xx 는 raise_for_status 에서 HTTPError 를 던지므로 그 전에 응답 요약을 로그.
+        # 실패 body 는 JSON 에러/HTML 에러 페이지 등 원인 단서인 경우가 많아 앞 200바이트만 기록.
+        # 성공 경로에서는 stream 소비 전 일부만 피킹하지 않으므로 body snippet 은 에러 때만.
+        if not response.ok:
+            try:
+                err_snippet = response.text[:200] if response.content else ""
+            except Exception:
+                err_snippet = "<read-failed>"
+            _dl_log.warning(
+                "다운로드 HTTP 실패 — status=%d content-type=%s body[:200]=%r path=%s",
+                response.status_code,
+                response.headers.get("content-type", "?"),
+                err_snippet,
+                save_path.name,
+            )
         response.raise_for_status()
         mode = "wb"
         total = _safe_content_length(response)
