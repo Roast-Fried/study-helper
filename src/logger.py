@@ -209,9 +209,10 @@ def get_error_logger(action: str) -> tuple[logging.Logger, Path]:
 
         handler = logging.FileHandler(log_path, encoding="utf-8")
         handler.setLevel(logging.DEBUG)
+        # LOG-SYS-5: 전역 로거와 동일 포맷 — grep 시 필드 위치 일관성 유지.
         handler.setFormatter(
             logging.Formatter(
-                "%(asctime)s [%(levelname)s] %(message)s",
+                "%(asctime)s [%(levelname)-5s] %(name)s: %(message)s",
                 datefmt="%Y-%m-%d %H:%M:%S",
             )
         )
