@@ -45,6 +45,41 @@ _BINARY_CT = ("image/", "video/", "audio/", "font/", "application/octet-stream")
 # scripts/sanitize_logs.py 에서도 동일 규칙을 공유해 drift 방지.
 
 
+def _build_progress_url(
+    progress_url: str,
+    *,
+    state: int,
+    duration_str: str,
+    current_str: str,
+    page: int,
+    total_page: int,
+    cumulative_page: int,
+    callback_prefix: str = "jQuery111_",
+) -> tuple[str, str]:
+    """LMS progress API JSONP URL 을 조립한다. (url, callback_name) 반환.
+
+    ARCH-006: 3개 호출사이트(완료 보고 / 30초 주기 / fake webm afterTimeUpdate)
+    가 같은 템플릿을 반복하던 것을 통합. 사이트별 숫자 포맷 미세 차이를
+    보존하기 위해 duration/current 는 pre-formatted 문자열을 받는다.
+    """
+    ts = int(time.time() * 1000)
+    callback = f"{callback_prefix}{ts}"
+    sep = "&" if "?" in progress_url else "?"
+    url = (
+        f"{progress_url}{sep}"
+        f"callback={callback}"
+        f"&state={state}"
+        f"&duration={duration_str}"
+        f"&currentTime={current_str}"
+        f"&cumulativeTime={current_str}"
+        f"&page={page}"
+        f"&totalpage={total_page}"
+        f"&cumulativePage={cumulative_page}"
+        f"&_={ts}"
+    )
+    return url, callback
+
+
 def _set_sl_param(url: str, value: str) -> str:
     """URL의 sl 쿼리 파라미터를 안전하게 변경한다."""
     p = urlparse(url)
@@ -330,24 +365,18 @@ async def _report_completion(
         return
 
     total_page = 15
-    sep = "&" if "?" in progress_url else "?"
 
     def _build_url() -> tuple[str, str]:
-        ts = int(time.time() * 1000)
-        cb = f"jQuery111_{ts}"
-        url = (
-            f"{progress_url}{sep}"
-            f"callback={cb}"
-            f"&state=3"
-            f"&duration={duration}"
-            f"&currentTime={duration:.2f}"
-            f"&cumulativeTime={duration:.2f}"
-            f"&page={total_page}"
-            f"&totalpage={total_page}"
-            f"&cumulativePage={total_page}"
-            f"&_={ts}"
+        return _build_progress_url(
+            progress_url,
+            state=3,
+            duration_str=str(duration),
+            current_str=f"{duration:.2f}",
+            page=total_page,
+            total_page=total_page,
+            cumulative_page=total_page,
+            callback_prefix="jQuery111_",
         )
-        return url, cb
 
     for attempt in range(3):
         if attempt > 0:
@@ -644,24 +673,18 @@ async def _play_via_progress_api(
         # 30초마다 진도 API 호출
         if current >= next_report or current >= duration:
             try:
-                ts = int(time.time() * 1000)
-                callback = f"jQuery111_{ts}"
-
                 cumulative_page = total_page if current >= duration else int(current / duration * total_page)
                 page_num = min(cumulative_page, total_page)
 
-                sep = "&" if "?" in progress_url else "?"
-                report_target = (
-                    f"{progress_url}{sep}"
-                    f"callback={callback}"
-                    f"&state=3"
-                    f"&duration={duration}"
-                    f"&currentTime={current:.2f}"
-                    f"&cumulativeTime={current:.2f}"
-                    f"&page={page_num}"
-                    f"&totalpage={total_page}"
-                    f"&cumulativePage={cumulative_page}"
-                    f"&_={ts}"
+                report_target, callback = _build_progress_url(
+                    progress_url,
+                    state=3,
+                    duration_str=str(duration),
+                    current_str=f"{current:.2f}",
+                    page=page_num,
+                    total_page=total_page,
+                    cumulative_page=cumulative_page,
+                    callback_prefix="jQuery111_",
                 )
                 log(f"  [API] 진도 보고: {int(current)}s/{int(duration)}s")
 
@@ -1276,14 +1299,15 @@ async def _play_lecture_inner(
                     cur = state.current
                     dur = state.duration
                     cum_page = max(1, math.ceil(cur / dur * _total_page))
-                    ts = int(now * 1000)
-                    sep = "&" if "?" in _lms_url else "?"
-                    progress_url = (
-                        f"{_lms_url}{sep}callback=_cb_{ts}&state=8"
-                        f"&duration={dur:.2f}"
-                        f"&currentTime={cur:.2f}&cumulativeTime={cur:.2f}"
-                        f"&page={cum_page}&totalpage={_total_page}"
-                        f"&cumulativePage={cum_page}&_={ts}"
+                    progress_url, _ = _build_progress_url(
+                        _lms_url,
+                        state=8,
+                        duration_str=f"{dur:.2f}",
+                        current_str=f"{cur:.2f}",
+                        page=cum_page,
+                        total_page=_total_page,
+                        cumulative_page=cum_page,
+                        callback_prefix="_cb_",
                     )
                     try:
                         result = await page.evaluate(f"""
