@@ -8,6 +8,7 @@
 암호화된 값은 "enc:" 접두사로 구별한다.
 """
 
+import getpass
 import os
 import threading
 from pathlib import Path
@@ -21,17 +22,40 @@ _data_dir = os.getenv("STUDY_HELPER_DATA_DIR", "")
 _KEY_PATH = Path(_data_dir) / ".secret_key" if _data_dir else Path(__file__).parent.parent / ".secret_key"
 
 _KEYRING_SERVICE = "study-helper"
-_KEYRING_KEY = "fernet-key"
+
+# SEC-007: 사용자별 keyring namespace. 동일 머신에서 여러 OS 사용자가
+# study-helper 를 쓰면 "fernet-key" 단일 키로는 서로의 키를 덮어쓴다.
+# `{username}` 접미사로 namespace 를 분리한다.
+# 기존 하드코딩 키("fernet-key") 로 저장된 값이 있을 수 있으므로
+# _try_keyring_load 가 legacy 키를 fallback 으로 읽어 migrate 한다.
+try:
+    _CURRENT_USER = getpass.getuser() or "default"
+except Exception:
+    _CURRENT_USER = "default"
+
+_KEYRING_KEY = f"fernet-key:{_CURRENT_USER}"
+_LEGACY_KEYRING_KEY = "fernet-key"
 
 
 def _try_keyring_load() -> bytes | None:
-    """OS 키체인에서 Fernet 키를 로드한다. 키체인 미지원 시 None."""
+    """OS 키체인에서 Fernet 키를 로드한다. 키체인 미지원 시 None.
+
+    SEC-007: 새 namespace 에 없으면 legacy "fernet-key" 에서 읽어 migrate.
+    """
     try:
         import keyring
 
         stored = keyring.get_password(_KEYRING_SERVICE, _KEYRING_KEY)
         if stored:
             return stored.encode()
+        # Legacy namespace fallback — 발견 시 새 namespace 로 migrate
+        legacy = keyring.get_password(_KEYRING_SERVICE, _LEGACY_KEYRING_KEY)
+        if legacy:
+            try:
+                keyring.set_password(_KEYRING_SERVICE, _KEYRING_KEY, legacy)
+            except Exception:
+                pass
+            return legacy.encode()
     except Exception:
         pass
     return None
