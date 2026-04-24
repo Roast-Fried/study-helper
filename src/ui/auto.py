@@ -12,9 +12,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, NamedTuple
 
 from rich.console import Console
-from rich.panel import Panel
 from rich.prompt import Prompt
-from rich.text import Text
 
 from src.config import KST, Config, get_data_path
 from src.downloader.paths import file_present
@@ -34,6 +32,7 @@ from src.service.scheduler import (
     next_schedule_time,
     parse_schedule_input,
 )
+from src.ui._widgets import header_panel
 
 if TYPE_CHECKING:
     from src.scraper.course_scraper import CourseScraper
@@ -220,13 +219,7 @@ async def run_auto_mode(
     # ── 필수 조건 체크 ────────────────────────────────────────────
     issues = _check_auto_prerequisites()
     if issues:
-        console.print(
-            Panel(
-                Text("자동 모드", justify="center", style="bold cyan"),
-                border_style="cyan",
-                padding=(0, 4),
-            )
-        )
+        console.print(header_panel("자동 모드"))
         console.print()
         console.print("  [bold yellow]자동 모드 실행을 위한 필수 조건이 만족하지 않았습니다.[/bold yellow]")
         console.print()
@@ -248,13 +241,7 @@ async def run_auto_mode(
 
     # ── 자동 모드 루프 ────────────────────────────────────────────
     console.clear()
-    console.print(
-        Panel(
-            Text("자동 모드", justify="center", style="bold cyan"),
-            border_style="cyan",
-            padding=(0, 4),
-        )
-    )
+    console.print(header_panel("자동 모드"))
     console.print()
     console.print(f"  스케줄: KST {', '.join(f'{h:02d}:00' for h in schedule_hours)}")
     console.print()

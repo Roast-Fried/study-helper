@@ -11,7 +11,6 @@ from pathlib import Path
 import requests
 from rich.console import Console
 from rich.live import Live
-from rich.panel import Panel
 from rich.progress import (
     BarColumn,
     DownloadColumn,
@@ -20,7 +19,6 @@ from rich.progress import (
     TextColumn,
     TransferSpeedColumn,
 )
-from rich.text import Text
 
 from src.config import Config, RetryPolicy
 from src.downloader.result import (
@@ -37,6 +35,7 @@ from src.downloader.result import (
     SuspiciousStubError,
 )
 from src.logger import get_error_logger
+from src.ui._widgets import header_panel
 from src.util.url import safe_url
 
 _MAX_URL_RETRIES = RetryPolicy.URL_EXTRACT
@@ -66,13 +65,7 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
     )
 
     console.print()
-    console.print(
-        Panel(
-            Text(lec.title, justify="center", style="bold cyan"),
-            border_style="cyan",
-            padding=(0, 4),
-        )
-    )
+    console.print(header_panel(lec.title))
     console.print()
 
     download_dir = Config.get_download_dir()

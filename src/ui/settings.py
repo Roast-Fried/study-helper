@@ -8,12 +8,11 @@
 from pathlib import Path
 
 from rich.console import Console
-from rich.panel import Panel
 from rich.prompt import Prompt
-from rich.text import Text
 
 from src.config import Config
 from src.summarizer.summarizer import GEMINI_DEFAULT_MODEL, GEMINI_MODEL_IDS, GEMINI_MODEL_LABELS
+from src.ui._widgets import header_panel
 
 console = Console()
 
@@ -26,13 +25,7 @@ def run_settings() -> None:
     최초 실행 또는 'setting' 입력 시 호출된다.
     """
     console.clear()
-    console.print(
-        Panel(
-            Text("설정", justify="center", style="bold cyan"),
-            border_style="cyan",
-            padding=(0, 4),
-        )
-    )
+    console.print(header_panel("설정"))
     console.print()
     console.print("  [dim]Enter를 누르면 현재 값(또는 기본값)을 유지합니다.[/dim]")
     console.print()

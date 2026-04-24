@@ -9,6 +9,7 @@ from rich.text import Text
 
 from src.config import APP_VERSION
 from src.scraper.models import Course, CourseDetail, LectureItem
+from src.ui._widgets import header_panel
 
 console = Console()
 
@@ -31,13 +32,7 @@ def _redraw_course_list(
 ) -> None:
     """과목 목록 테이블을 (재)출력한다."""
     console.clear()
-    console.print(
-        Panel(
-            Text("수강 중인 과목 목록", justify="center", style="bold cyan"),
-            border_style="cyan",
-            padding=(0, 4),
-        )
-    )
+    console.print(header_panel("수강 중인 과목 목록"))
     info_parts = [f"v{APP_VERSION}"]
     if user_id:
         info_parts.append(f"학번: {user_id}")
@@ -166,13 +161,7 @@ def show_week_list(course: Course, detail: CourseDetail) -> tuple[LectureItem, L
 def _render_week_list(course: Course, detail: CourseDetail) -> list[LectureItem]:
     """주차별 강의 목록을 출력하고 전체 영상 강의 리스트를 반환한다."""
     console.clear()
-    console.print(
-        Panel(
-            Text(course.long_name, justify="center", style="bold cyan"),
-            border_style="cyan",
-            padding=(0, 4),
-        )
-    )
+    console.print(header_panel(course.long_name))
     console.print()
 
     video_weeks = [w for w in detail.weeks if w.video_lectures]
@@ -248,13 +237,7 @@ def _show_lecture_action_menu(lec: LectureItem) -> LectureAction:
     rule_label = {"video": "mp4", "audio": "mp3", "both": "mp4 + mp3"}.get(rule, rule)
 
     console.print()
-    console.print(
-        Panel(
-            Text(lec.title, justify="center", style="bold"),
-            border_style="dim",
-            padding=(0, 2),
-        )
-    )
+    console.print(header_panel(lec.title, style="bold", border_style="dim", padding=(0, 2)))
     console.print()
     console.print("  [bold]1.[/bold] 재생  [dim](백그라운드 출석 처리)[/dim]")
     console.print(f"  [bold]2.[/bold] 다운로드  [dim]({rule_label})[/dim]")
