@@ -109,7 +109,10 @@ def get_logger(name: str = "study_helper") -> logging.Logger:
                 datefmt="%Y-%m-%d %H:%M:%S",
             )
         )
-        _app_logger.addFilter(_SENSITIVE_FILTER)  # LOG-SYS-3: 전역 마스킹
+        # LOG-SYS-3: filter 를 handler 에 부착해야 child 로거가 propagate 한 레코드에도
+        # 적용된다. 로거에 부착하면 Python logging 규약상 해당 로거가 직접 받은 레코드만
+        # 거치고 propagate 된 레코드는 건너뛴다(실증으로 확인됨).
+        file_handler.addFilter(_SENSITIVE_FILTER)
         _app_logger.addHandler(file_handler)
         # SEC-008: 로그 파일 권한 0o600 (POSIX). Windows 는 no-op.
         try:
@@ -233,7 +236,8 @@ def get_error_logger(action: str) -> tuple[logging.Logger, Path]:
                 datefmt="%Y-%m-%d %H:%M:%S",
             )
         )
-        logger.addFilter(_SENSITIVE_FILTER)  # LOG-SYS-3
+        # LOG-SYS-3: handler 에 부착 (로거 부착은 propagate 레코드에 미적용).
+        handler.addFilter(_SENSITIVE_FILTER)
         logger.addHandler(handler)
         # SEC-008: 에러 로그 파일도 0o600 (POSIX). Windows 는 no-op.
         try:
