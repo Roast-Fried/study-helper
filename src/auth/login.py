@@ -42,11 +42,15 @@ async def perform_login(page: Page, username: str, password: str) -> bool:
         _log.warning("로그인 실패: %s: %s", type(e).__name__, e)
         return False
     finally:
-        # SEC-011: best-effort password zeroize — 지역 변수를 덮어써 heap 잔존 window 단축
+        # SEC-011: password 참조 조기 해제.
+        # 주의: Python str 은 immutable 이라 `password = "..."` 는 새 객체를 만들어
+        # 이름을 rebind 할 뿐 원본 string 의 heap 바이트는 GC 시점까지 잔존한다.
+        # 또한 page.fill("input#pwd", password) 로 Playwright 가 이미 자체 사본을
+        # 보유한 상태이므로 Python 측 zeroize 의 실효성은 제한적이다.
+        # 실질 효과는 지역 변수 참조를 스택 프레임에서 즉시 제거하는 것에 한정.
         try:
-            password = "\0" * len(password)
             del password
-        except Exception:
+        except NameError:
             pass
 
 

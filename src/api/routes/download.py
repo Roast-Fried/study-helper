@@ -70,11 +70,14 @@ async def resolve_path(body: ResolvePathRequest) -> dict[str, str]:
 
     LOG-001: 순수 경로 계산이라 블로킹은 없으나 transcribe/summarize 와
     동일하게 async def 로 통일해 핸들러 일관성을 유지한다.
+
+    실패 시 기존에는 `{"error": "..."}` 을 반환해 성공/실패 응답 shape 가
+    달랐다. HTTPException 400 으로 통일해 성공 응답은 `{"path": str}` 한 가지.
     """
     download_dir = Config.get_download_dir()
     result = resolve_download_path(download_dir, body.course_name, body.week_label, body.lecture_title)
     if result is None:
-        return {"error": "잘못된 경로"}
+        raise HTTPException(status_code=400, detail="유효하지 않은 다운로드 경로 파라미터")
     return {"path": str(result)}
 
 
