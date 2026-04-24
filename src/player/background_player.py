@@ -247,6 +247,8 @@ async def _create_fake_webm(duration_sec: float) -> bytes:
             output_path,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
+            # SEC-010: subprocess 에 민감 env 상속 차단 — PATH 만 전달.
+            env={"PATH": os.environ.get("PATH", "")},
         )
         await proc.communicate()
         if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:

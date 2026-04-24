@@ -4,12 +4,29 @@ mp4 → mp3 변환.
 ffmpeg를 subprocess로 호출하여 영상에서 오디오를 추출한다.
 """
 
+import os
 import subprocess
 from pathlib import Path
 
 from src.logger import get_logger
 
 _log = get_logger("converter")
+
+
+def _safe_subprocess_env() -> dict[str, str]:
+    """SEC-010: subprocess 에 전달할 whitelist 환경 변수.
+
+    기본 전체 env 를 상속하면 LMS_PASSWORD / GOOGLE_API_KEY / TELEGRAM_BOT_TOKEN
+    등 민감 정보가 ffmpeg child 에 그대로 전달된다. ffmpeg 자체는 악성이 아니지만
+    segfault 시 core dump 에 노출되거나 libavformat 이 HTTP 프록시/auth env 를
+    참조할 수 있다. PATH / TMPDIR 만 whitelisting.
+    """
+    env = {"PATH": os.environ.get("PATH", "")}
+    for key in ("TMPDIR", "TEMP", "TMP", "SYSTEMROOT", "WINDIR"):
+        val = os.environ.get(key)
+        if val:
+            env[key] = val
+    return env
 
 
 def convert_to_mp3(mp4_path: Path, mp3_path: Path | None = None, overwrite: bool = False) -> Path:
@@ -64,6 +81,7 @@ def convert_to_mp3(mp4_path: Path, mp3_path: Path | None = None, overwrite: bool
             text=True,
             encoding="utf-8",
             errors="replace",
+            env=_safe_subprocess_env(),  # SEC-010
         )
     except FileNotFoundError:
         raise FileNotFoundError("ffmpeg가 설치되어 있지 않습니다. ffmpeg를 먼저 설치해주세요.") from None

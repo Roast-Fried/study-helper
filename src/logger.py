@@ -66,6 +66,11 @@ def get_logger(name: str = "study_helper") -> logging.Logger:
             )
         )
         _app_logger.addHandler(file_handler)
+        # SEC-008: 로그 파일 권한 0o600 (POSIX). Windows 는 no-op.
+        try:
+            log_path.chmod(0o600)
+        except OSError:
+            pass
         _app_logger.info("로그 디렉토리: %s", logs_dir.resolve())
 
     if name == "study_helper":
@@ -134,6 +139,11 @@ def get_error_logger(action: str) -> tuple[logging.Logger, Path]:
             )
         )
         logger.addHandler(handler)
+        # SEC-008: 에러 로그 파일도 0o600 (POSIX). Windows 는 no-op.
+        try:
+            log_path.chmod(0o600)
+        except OSError:
+            pass
 
     _error_loggers[cache_key] = (logger, log_path)
     return logger, log_path
