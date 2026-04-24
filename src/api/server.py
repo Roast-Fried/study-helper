@@ -22,14 +22,25 @@ from src.api.routes import notify as notify_routes
 
 # ── 토큰 인증 ─────────────────────────────────────────────────
 # Electron이 시작 시 랜덤 토큰을 생성하여 STUDY_HELPER_API_TOKEN 환경변수로 전달한다.
-# 토큰이 설정되지 않으면 인증 없이 동작한다 (개발 모드).
+# 토큰 미설정 시 서버 부팅 거부 (SEC-002 fail-closed).
+# 127.0.0.1 bind 만으로는 로컬 다른 프로세스의 무인증 접근을 막을 수 없으므로
+# 토큰을 의무화한다. 개발 중 테스트용으로 임시 무시가 필요하면
+# STUDY_HELPER_API_ALLOW_NO_TOKEN=1 을 명시적으로 설정해야 한다.
 _API_TOKEN = os.getenv("STUDY_HELPER_API_TOKEN", "")
+_ALLOW_NO_TOKEN = os.getenv("STUDY_HELPER_API_ALLOW_NO_TOKEN", "") == "1"
+
+if not _API_TOKEN and not _ALLOW_NO_TOKEN:
+    raise RuntimeError(
+        "STUDY_HELPER_API_TOKEN 이 설정되지 않았습니다. "
+        "Electron 앱에서 랜덤 토큰을 주입하거나, "
+        "개발 환경에서는 STUDY_HELPER_API_ALLOW_NO_TOKEN=1 을 설정하세요."
+    )
 
 
 def _verify_token(authorization: str | None = Header(default=None)):
-    """Bearer 토큰 인증. 토큰 미설정 시 localhost 직접 접근만 허용."""
+    """Bearer 토큰 인증."""
     if not _API_TOKEN:
-        # 토큰 미설정(개발 모드)에서도 localhost만 허용
+        # STUDY_HELPER_API_ALLOW_NO_TOKEN=1 명시 시에만 도달 — 인증 우회
         return
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="인증 토큰이 필요합니다.")
