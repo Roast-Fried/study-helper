@@ -475,12 +475,18 @@ async def extract_video_url_detailed(page: Page, lecture_url: str) -> Extraction
     finally:
         page.remove_listener("request", _on_request)
         page.remove_listener("response", _on_response)
-        # fire-and-forget 파싱 태스크 정리
+        # fire-and-forget 파싱 태스크 정리.
+        # LOG-015: 우리가 직접 호출한 cancel() 의 결과로 받는 CancelledError 는
+        # 정상 경로이므로 억제. Exception 도 정리 단계라 상위 전파 불필요.
+        # 외부에서 상위 태스크가 cancel 될 경우에는 이 finally 자체가 실행되지 않고
+        # 곧바로 상위로 전파되므로 suppression 이 cooperative cancellation 을 위반하지 않는다.
         if _bg_task is not None and not _bg_task.done():
             _bg_task.cancel()
             try:
                 await _bg_task
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError:
+                pass
+            except Exception:
                 pass
 
 
