@@ -14,6 +14,10 @@ async def perform_login(page: Page, username: str, password: str) -> bool:
 
     LOG-008: 실패 경로에서 exception 을 조용히 삼켰던 것을 warning 로그로
     변경해 네트워크 오류·셀렉터 변경·페이지 구조 변경 원인 추적이 가능하게 한다.
+
+    SEC-011: 반환 직전에 password 지역 변수를 덮어쓰고 del 하여 heap 잔존 window
+    를 단축한다. CPython 에서는 참조 카운트 기반 GC 이므로 완전한 zeroize 는
+    보장되지 않지만(다른 레퍼런스/internal copy 가 있을 수 있음) best-effort 로 수행.
     """
     try:
         login_button = await page.query_selector(".login_btn a")
@@ -37,6 +41,13 @@ async def perform_login(page: Page, username: str, password: str) -> bool:
     except Exception as e:
         _log.warning("로그인 실패: %s: %s", type(e).__name__, e)
         return False
+    finally:
+        # SEC-011: best-effort password zeroize — 지역 변수를 덮어써 heap 잔존 window 단축
+        try:
+            password = "\0" * len(password)
+            del password
+        except Exception:
+            pass
 
 
 async def ensure_logged_in(page: Page, username: str, password: str) -> bool:

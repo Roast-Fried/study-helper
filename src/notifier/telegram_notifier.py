@@ -314,7 +314,7 @@ def verify_bot(bot_token: str, chat_id: str) -> tuple[bool, str]:
         (성공 여부, 오류 메시지 또는 빈 문자열)
     """
     if not _validate_token(bot_token):
-        return False, "봇 토큰 형식이 올바르지 않습니다."
+        return False, "INVALID_TOKEN_FORMAT"
 
     try:
         resp = requests.get(
@@ -323,23 +323,28 @@ def verify_bot(bot_token: str, chat_id: str) -> tuple[bool, str]:
         )
         try:
             if not resp.ok:
+                # SEC-009: Telegram 응답 원문에 토큰 일부/요청 URL 이 포함될 수 있어
+                # 응답으로 노출하지 않는다. 상세는 서버 로그에만.
                 try:
-                    data = resp.json()
-                    desc = data.get("description", resp.text)
+                    desc = resp.json().get("description", "")
                 except ValueError:
-                    desc = resp.text
-                return False, f"봇 토큰 오류: {desc}"
+                    desc = resp.text[:200]
+                _log.warning("Telegram getMe 실패 (%d): %s", resp.status_code, desc)
+                if resp.status_code in (401, 404):
+                    return False, "INVALID_TOKEN"
+                return False, "TELEGRAM_API_ERROR"
             try:
                 bot_name = resp.json().get("result", {}).get("username", "")
             except ValueError:
-                return False, "봇 응답 파싱 실패"
+                return False, "TELEGRAM_API_ERROR"
         finally:
             resp.close()
     except Exception as e:
-        return False, f"네트워크 오류: {e}"
+        _log.warning("Telegram getMe 네트워크 오류: %s: %s", type(e).__name__, e)
+        return False, "NETWORK_ERROR"
 
     ok = _send_message(bot_token, chat_id, f"[알림] study-helper 텔레그램 알림이 연결되었습니다! (봇: @{bot_name})")
     if not ok:
-        return False, "메시지 전송 실패. Chat ID를 확인하세요."
+        return False, "INVALID_CHAT_ID"
 
     return True, ""
