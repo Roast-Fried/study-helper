@@ -7,7 +7,6 @@ requests로 청크 스트리밍 다운로드한다.
 
 import asyncio
 import re
-import time
 from collections.abc import Callable
 from http.client import IncompleteRead
 from pathlib import Path
@@ -157,18 +156,6 @@ def _sanitize_filename(name: str) -> str:
     sanitized = sanitized.strip(" .")
     sanitized = re.sub(r"\s+", " ", sanitized)
     return sanitized or "lecture"
-
-
-async def extract_video_url(page: Page, lecture_url: str) -> str | None:
-    """
-    LMS 강의 페이지에서 mp4 URL을 추출한다 (backward-compat wrapper).
-
-    기존 호출자와의 호환을 위해 URL 문자열 또는 None 만 반환한다.
-    세분화된 실패 사유와 진단 컨텍스트가 필요한 호출자는
-    `extract_video_url_detailed()` 를 직접 호출한다.
-    """
-    result = await extract_video_url_detailed(page, lecture_url)
-    return result.url
 
 
 async def extract_video_url_detailed(page: Page, lecture_url: str) -> ExtractionResult:
@@ -539,49 +526,6 @@ async def download_video_with_browser(
     raise last_error
 
 
-def download_video(
-    url: str,
-    save_path: Path,
-    on_progress: Callable[[int, int], None] | None = None,
-    cookies: dict[str, str] | None = None,
-    referer: str | None = None,
-) -> Path:
-    """
-    HTTP 스트리밍으로 영상을 다운로드한다.
-
-    Args:
-        url:         직접 다운로드 가능한 mp4 URL
-        save_path:   저장 경로 (파일명 포함)
-        on_progress: (downloaded_bytes, total_bytes) 콜백
-
-    Returns:
-        저장된 파일의 Path
-
-    Raises:
-        Exception: 최대 재시도 후에도 실패한 경우
-    """
-    _validate_media_url(url)
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-
-    last_error: Exception | None = None
-    for attempt in range(1, _MAX_RETRIES + 1):
-        try:
-            _stream_download(url, save_path, on_progress, attempt, cookies=cookies, referer=referer)
-            return save_path.resolve()
-        except (IncompleteRead, requests.exceptions.ChunkedEncodingError) as e:
-            last_error = e
-            _remove_partial(save_path)
-            if attempt < _MAX_RETRIES:
-                wait = 2**attempt
-                time.sleep(wait)
-        except Exception as e:
-            last_error = e
-            _remove_partial(save_path)
-            break
-
-    if last_error is None:
-        raise RuntimeError("다운로드 실패: 알 수 없는 오류")
-    raise last_error
 
 
 def _stream_download(
