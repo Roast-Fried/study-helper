@@ -537,14 +537,10 @@ def _stream_download(
     cookies: dict[str, str] | None = None,
     referer: str | None = None,
 ) -> None:
+    # LOG-012: Range 이어받기 로직 제거. 상위 재시도 루프가 매번 _remove_partial()
+    # 을 호출하여 save_path 를 삭제하므로 이어받기가 성립할 조건 자체가 없었다.
+    # 실제로는 매번 처음부터 다시 다운로드하고 있었음. attempt 파라미터는 로깅용으로만 사용.
     headers: dict[str, str] = {"Referer": referer} if referer else {}
-    existing_size = 0
-
-    # 재시도 시 기존 파일이 있으면 이어받기 시도
-    if attempt > 1 and save_path.exists():
-        existing_size = save_path.stat().st_size
-        if existing_size > 0:
-            headers["Range"] = f"bytes={existing_size}-"
 
     response = requests.get(url, stream=True, timeout=_TIMEOUT, cookies=cookies, headers=headers)
 
@@ -555,20 +551,10 @@ def _stream_download(
             return 0
 
     try:
-        if response.status_code == 206:
-            # 서버가 Range 지원 → 이어받기
-            mode = "ab"
-            total = existing_size + _safe_content_length(response)
-            downloaded = existing_size
-        elif response.status_code == 200:
-            # 서버가 Range 미지원 또는 첫 시도 → 처음부터
-            response.raise_for_status()
-            mode = "wb"
-            total = _safe_content_length(response)
-            downloaded = 0
-        else:
-            response.raise_for_status()
-            return
+        response.raise_for_status()
+        mode = "wb"
+        total = _safe_content_length(response)
+        downloaded = 0
 
         # B2 진단: CDN 응답의 Content-Type + Content-Length를 로깅
         _ct = response.headers.get("content-type", "?")
