@@ -71,23 +71,39 @@ def _is_docker_with_data_volume() -> bool:
     return Path("/.dockerenv").exists() and Path("/data").is_dir()
 
 
-def get_data_path(filename: str) -> Path:
-    """데이터 파일 경로를 반환한다.
+def get_data_base() -> Path:
+    """데이터 디렉토리의 base 경로를 반환한다 (ARCH-009).
 
     우선순위:
     1. STUDY_HELPER_DATA_DIR 환경변수 (Electron 앱이 설정)
     2. Docker 컨테이너(/data 마운트): /data
     3. 로컬: 프로젝트 루트/data (CWD 무관)
+
+    이 함수는 logger.py / crypto.py 등 여러 모듈에서 동일 로직을 복제하던 것을
+    수렴한다. 디렉토리는 필요 시 호출자가 mkdir 한다.
     """
     env_dir = os.getenv("STUDY_HELPER_DATA_DIR", "")
     if env_dir:
-        base = Path(env_dir)
-    elif _is_docker_with_data_volume():
-        base = Path("/data")
-    else:
-        base = Path(__file__).resolve().parent.parent / "data"
+        return Path(env_dir)
+    if _is_docker_with_data_volume():
+        return Path("/data")
+    return Path(__file__).resolve().parent.parent / "data"
+
+
+def get_data_path(filename: str) -> Path:
+    """데이터 파일의 절대 경로를 반환한다. base 디렉토리는 자동 생성."""
+    base = get_data_base()
     base.mkdir(parents=True, exist_ok=True)
     return base / filename
+
+
+def get_logs_path() -> Path:
+    """로그 디렉토리 경로를 반환한다 (ARCH-009).
+
+    STUDY_HELPER_DATA_DIR 하위 `logs/` 를 사용. logger.py 가 직접 env 파싱하던
+    중복을 제거한다.
+    """
+    return get_data_base() / "logs"
 
 
 class Config:

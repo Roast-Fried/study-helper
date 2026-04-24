@@ -3,10 +3,18 @@
 from unittest.mock import patch
 
 
+def _patch_key_path(key_file):
+    """`_key_path()` 를 특정 경로를 반환하도록 패치하고 cache 초기화."""
+    from src import crypto
+
+    crypto._key_path.cache_clear()
+    return patch.object(crypto, "_key_path", return_value=key_file)
+
+
 def test_encrypt_decrypt_roundtrip(tmp_path):
     """암호화 후 복호화하면 원본과 동일해야 한다."""
     key_file = tmp_path / ".secret_key"
-    with patch("src.crypto._KEY_PATH", key_file):
+    with _patch_key_path(key_file):
         from src.crypto import decrypt, encrypt, is_encrypted
 
         original = "test_password_123!@#"
@@ -35,7 +43,7 @@ def test_is_encrypted():
 def test_encrypt_empty_string(tmp_path):
     """빈 문자열도 암호화/복호화 가능해야 한다."""
     key_file = tmp_path / ".secret_key"
-    with patch("src.crypto._KEY_PATH", key_file):
+    with _patch_key_path(key_file):
         from src.crypto import decrypt, encrypt
 
         encrypted = encrypt("")
@@ -43,16 +51,25 @@ def test_encrypt_empty_string(tmp_path):
 
 
 def test_different_keys_cannot_decrypt(tmp_path):
-    """다른 키로는 복호화할 수 없어야 한다 (빈 문자열 반환)."""
+    """다른 키로는 복호화할 수 없어야 한다 (빈 문자열 반환).
+
+    _fernet 캐시를 무효화하기 위해 키 파일 변경 사이에 _cached_fernet 을 리셋한다.
+    """
+    from src import crypto
+
     key_file_1 = tmp_path / "key1"
     key_file_2 = tmp_path / "key2"
 
-    with patch("src.crypto._KEY_PATH", key_file_1):
+    with _patch_key_path(key_file_1):
+        crypto._cached_fernet = None
+        crypto._cached_fernet_key = None
         from src.crypto import encrypt
 
         encrypted = encrypt("secret")
 
-    with patch("src.crypto._KEY_PATH", key_file_2):
+    with _patch_key_path(key_file_2):
+        crypto._cached_fernet = None
+        crypto._cached_fernet_key = None
         from src.crypto import decrypt
 
         assert decrypt(encrypted) == ""

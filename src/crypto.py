@@ -9,17 +9,26 @@
 """
 
 import getpass
-import os
 import threading
+from functools import cache
 from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
 
 _PREFIX = "enc:"
 
-# 키 경로: STUDY_HELPER_DATA_DIR이 설정되면 그 안의 .secret_key 사용
-_data_dir = os.getenv("STUDY_HELPER_DATA_DIR", "")
-_KEY_PATH = Path(_data_dir) / ".secret_key" if _data_dir else Path(__file__).parent.parent / ".secret_key"
+
+@cache
+def _key_path() -> Path:
+    """키 경로를 반환한다 (ARCH-009).
+
+    `get_data_base` 를 지연 import 로 호출해 config.py 와의 circular import 를 피한다.
+    config 가 crypto.decrypt 를 import 하므로 crypto 가 config 를 top-level import
+    하면 순환이 성립. 함수 호출 시점에는 모듈 초기화가 끝나 있어 안전.
+    """
+    from src.config import get_data_base
+
+    return get_data_base() / ".secret_key"
 
 _KEYRING_SERVICE = "study-helper"
 
@@ -74,9 +83,10 @@ def _try_keyring_save(key: bytes) -> bool:
 
 def _resolve_key_file() -> Path:
     """키 파일 경로를 결정한다. .secret_key가 디렉토리일 때 내부 key 파일 사용."""
-    if _KEY_PATH.is_dir():
-        return _KEY_PATH / "key"
-    return _KEY_PATH
+    key_path = _key_path()
+    if key_path.is_dir():
+        return key_path / "key"
+    return key_path
 
 
 def _load_or_create_key() -> bytes:

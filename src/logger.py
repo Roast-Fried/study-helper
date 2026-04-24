@@ -9,8 +9,6 @@
 """
 
 import logging
-import os
-import sys
 from datetime import datetime, timedelta, timezone
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
@@ -20,18 +18,17 @@ from pathlib import Path
 # logger 내부에서도 aware datetime 을 사용한다 (circular import 회피용 inline 정의).
 _KST = timezone(timedelta(hours=9))
 
-# 로그 디렉토리 결정 — config.get_data_path 와 동일한 우선순위
-# 1) STUDY_HELPER_DATA_DIR  2) Docker 컨테이너(/data)  3) 프로젝트 루트/logs
-#
-# Windows에서 `Path("/data").exists()`가 드라이브 루트의 \\data 를 가리켜
-# 오탐하는 문제를 방지하기 위해 Linux + /.dockerenv + /data 디렉토리를 함께 검증.
-_study_data_dir = os.getenv("STUDY_HELPER_DATA_DIR", "")
-if _study_data_dir:
-    _LOGS_DIR = Path(_study_data_dir) / "logs"
-elif sys.platform == "linux" and Path("/.dockerenv").exists() and Path("/data").is_dir():
-    _LOGS_DIR = Path("/data/logs")
-else:
-    _LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
+
+def _logs_dir() -> Path:
+    """로그 디렉토리를 반환한다 (ARCH-009).
+
+    config.get_logs_path() 단일 소스에서 해결하되, config 가 crypto 를 import
+    하고 crypto 도 logging 을 쓸 수 있어 top-level import 는 circular 유발.
+    함수 호출 시점에 import.
+    """
+    from src.config import get_logs_path
+
+    return get_logs_path()
 
 _app_logger: logging.Logger | None = None
 
@@ -49,8 +46,9 @@ def get_logger(name: str = "study_helper") -> logging.Logger:
         _app_logger.setLevel(logging.DEBUG)
         _app_logger.propagate = False
 
-        _LOGS_DIR.mkdir(parents=True, exist_ok=True)
-        log_path = _LOGS_DIR / "study_helper.log"
+        logs_dir = _logs_dir()
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        log_path = logs_dir / "study_helper.log"
 
         # 일별 로테이션, 7일 보관
         file_handler = TimedRotatingFileHandler(
@@ -68,7 +66,7 @@ def get_logger(name: str = "study_helper") -> logging.Logger:
             )
         )
         _app_logger.addHandler(file_handler)
-        _app_logger.info("로그 디렉토리: %s", _LOGS_DIR.resolve())
+        _app_logger.info("로그 디렉토리: %s", logs_dir.resolve())
 
     if name == "study_helper":
         return _app_logger
@@ -116,10 +114,11 @@ def get_error_logger(action: str) -> tuple[logging.Logger, Path]:
     # 날짜가 변경되었으면 이전 핸들러 정리
     _cleanup_stale_error_loggers(today)
 
-    _LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    logs_dir = _logs_dir()
+    logs_dir.mkdir(parents=True, exist_ok=True)
 
     timestamp = datetime.now(_KST).strftime("%Y%m%d_%H%M%S")
-    log_path = _LOGS_DIR / f"{timestamp}_{action}.log"
+    log_path = logs_dir / f"{timestamp}_{action}.log"
 
     logger = logging.getLogger(f"study_helper.error.{cache_key}")
     if not logger.hasHandlers():
