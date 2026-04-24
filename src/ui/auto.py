@@ -244,11 +244,18 @@ async def run_auto_mode(
     stop_event = asyncio.Event()
 
     async def _input_listener():
-        """별도 태스크로 사용자 입력을 감시한다. '0' + Enter로 종료."""
+        """별도 태스크로 사용자 입력을 감시한다. '0' + Enter로 종료.
+
+        LOG-004: stdin 이 TTY 가 아닌 환경(e.g. 파이프/리다이렉션/Docker detach)
+        에서 readline 은 즉시 "" (EOF) 을 반환한다. 이 경우 while 루프가
+        CPU 100% 로 폭주하므로 EOF 즉시 break.
+        """
         loop = asyncio.get_running_loop()
         while not stop_event.is_set():
             try:
                 line = await loop.run_in_executor(None, sys.stdin.readline)
+                if not line:  # EOF (non-TTY) — 루프 폭주 방지
+                    break
                 if line.strip() == "0":
                     stop_event.set()
                     break
