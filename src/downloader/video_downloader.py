@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 import requests
 from playwright.async_api import Page
 
+from src.config import RetryPolicy
 from src.downloader.result import (
     REASON_UNSUPPORTED,
     REASON_URL_EXTRACT_CONTENT_PHP_MISSING,
@@ -32,7 +33,7 @@ from src.player.background_player import click_play, dismiss_dialog, find_player
 
 _dl_log = get_logger("downloader")
 
-_MAX_RETRIES = 3
+_MAX_RETRIES = RetryPolicy.STREAM
 _TIMEOUT = (10, 60)  # (connect, read) seconds
 _CHUNK_SIZE = 65536  # 64 KB
 

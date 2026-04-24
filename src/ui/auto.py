@@ -69,11 +69,11 @@ class DownloadStepResult(NamedTuple):
     reason: str | None
     downloadable: bool
 
-# 재생 재시도 설정
-_MAX_PLAY_RETRIES = 3
+# ARCH-010: 재시도 정책은 src.config.RetryPolicy 에서 단일 관리.
+from src.config import RetryPolicy as _RetryPolicy  # noqa: E402
 
-# 브라우저 메모리 누적 방지: N사이클마다 브라우저 재시작
-_BROWSER_RESTART_INTERVAL = 3
+_MAX_PLAY_RETRIES = _RetryPolicy.PLAY
+_BROWSER_RESTART_INTERVAL = _RetryPolicy.BROWSER_RESTART_INTERVAL
 
 # B3: Playwright driver/browser 죽음을 감지하는 예외 메시지 패턴.
 # 이 중 하나가 예외 메시지에 포함되면 scraper를 close() 후 start()로 재시작한다.
@@ -606,7 +606,7 @@ async def _process_download_only(
     )
 
 
-_MAX_DOWNLOAD_RETRIES = 3
+_MAX_DOWNLOAD_RETRIES = _RetryPolicy.DOWNLOAD
 
 
 async def _run_download_step(

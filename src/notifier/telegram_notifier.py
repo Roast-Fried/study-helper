@@ -14,6 +14,7 @@ from pathlib import Path
 
 import requests
 
+from src.config import RetryPolicy
 from src.logger import get_logger
 
 _log = get_logger("notifier.telegram")
@@ -26,8 +27,9 @@ _TELEGRAM_MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
 _BOT_TOKEN_RE = re.compile(r"^\d+:[A-Za-z0-9_-]+$")
 # 일시 장애 재시도 정책 — 최대 3회, exponential backoff (1s, 2s).
 # 5xx 또는 network 예외만 retry. 4xx(잘못된 chat_id 등) 는 즉시 실패 처리.
-_MAX_RETRIES = 3
-_RETRY_BASE_DELAY = 1.0
+# ARCH-010: RetryPolicy 전역 정책 사용.
+_MAX_RETRIES = RetryPolicy.TELEGRAM
+_RETRY_BASE_DELAY = RetryPolicy.TELEGRAM_BASE_DELAY
 
 
 def _is_retriable_status(status_code: int) -> bool:

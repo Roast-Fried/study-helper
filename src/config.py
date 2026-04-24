@@ -59,6 +59,24 @@ def _read_version() -> str:
 APP_VERSION = _read_version()
 
 
+class RetryPolicy:
+    """시스템 전역 재시도 정책 (ARCH-010).
+
+    각 모듈에 산재하던 _MAX_*_RETRIES / _RETRY_WAIT / _RETRY_BASE_DELAY 를
+    단일 지점으로 수렴. 튜닝 시 여기만 수정한다.
+    """
+
+    PLAY = 3  # ui/auto 재생 재시도
+    DOWNLOAD = 3  # ui/auto 다운로드 재시도
+    URL_EXTRACT = 3  # ui/download URL 추출 재시도
+    STREAM = 3  # downloader/video_downloader HTTP 스트리밍 재시도
+    TELEGRAM = 3  # notifier/telegram HTTP 호출 재시도
+
+    URL_RETRY_WAIT_SEC = 10  # URL 추출 실패 후 대기 시간
+    TELEGRAM_BASE_DELAY = 1.0  # Telegram backoff 기본 (2**attempt 곱)
+    BROWSER_RESTART_INTERVAL = 3  # 자동 모드 N 사이클마다 브라우저 재시작
+
+
 def _is_docker_with_data_volume() -> bool:
     """Docker 컨테이너 내부이면서 /data 볼륨이 마운트된 경우에만 True.
 

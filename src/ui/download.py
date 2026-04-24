@@ -22,7 +22,7 @@ from rich.progress import (
 )
 from rich.text import Text
 
-from src.config import Config
+from src.config import Config, RetryPolicy
 from src.downloader.result import (
     REASON_MP3_FAILED,
     REASON_NETWORK,
@@ -39,8 +39,8 @@ from src.downloader.result import (
 from src.logger import get_error_logger
 from src.util.url import safe_url
 
-_MAX_URL_RETRIES = 3
-_RETRY_WAIT = 10  # seconds
+_MAX_URL_RETRIES = RetryPolicy.URL_EXTRACT
+_RETRY_WAIT = RetryPolicy.URL_RETRY_WAIT_SEC
 
 console = Console()
 
