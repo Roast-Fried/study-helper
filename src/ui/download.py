@@ -79,18 +79,19 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
 
     download_dir = Config.get_download_dir()
 
-    def _tg_error(msg_fn):
-        """텔레그램 오류 알림을 전송한다 (설정된 경우에만)."""
-        creds = Config.get_telegram_credentials()
-        if creds:
-            msg_fn(creds[0], creds[1])
+    from src.notifier.telegram_dispatch import dispatch_if_configured
 
     # 1. 구조적으로 다운로드 불가능한 항목 조기 감지 (learningx 등)
     if not lec.is_downloadable:
         console.print("  [yellow]다운로드 불가:[/yellow] 이 강의는 다운로드가 지원되지 않는 형식입니다.")
         from src.notifier.telegram_notifier import notify_download_unsupported
 
-        _tg_error(lambda t, c: notify_download_unsupported(t, c, course.long_name, lec.week_label, lec.title))
+        dispatch_if_configured(
+            notify_download_unsupported,
+            course_name=course.long_name,
+            week_label=lec.week_label,
+            lecture_title=lec.title,
+        )
         return DownloadResult(ok=False, reason=REASON_UNSUPPORTED)
 
     # 2. video URL 추출 (최대 3회 재시도)
@@ -131,7 +132,12 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
         console.print(f"  [dim]로그 저장: {log_path}[/dim]")
         from src.notifier.telegram_notifier import notify_download_error
 
-        _tg_error(lambda t, c: notify_download_error(t, c, course.long_name, lec.week_label, lec.title))
+        dispatch_if_configured(
+            notify_download_error,
+            course_name=course.long_name,
+            week_label=lec.week_label,
+            lecture_title=lec.title,
+        )
         return DownloadResult(ok=False, reason=extract_reason)
 
     # 3. 파일 경로 결정
@@ -180,7 +186,12 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
         console.print(f"  [dim]로그 저장: {log_path}[/dim]")
         from src.notifier.telegram_notifier import notify_download_error
 
-        _tg_error(lambda t, c: notify_download_error(t, c, course.long_name, lec.week_label, lec.title))
+        dispatch_if_configured(
+            notify_download_error,
+            course_name=course.long_name,
+            week_label=lec.week_label,
+            lecture_title=lec.title,
+        )
 
         # 실패 사유 분류
         if isinstance(e, SSRFBlockedError):

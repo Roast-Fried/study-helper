@@ -214,15 +214,11 @@ async def _load_courses(scraper: CourseScraper):
 
 def _tg_notify_playback_complete(course_name: str, lec) -> None:
     """재생 완료 텔레그램 알림 전송."""
-    creds = Config.get_telegram_credentials()
-    if not creds:
-        return
-    token, chat_id = creds
+    from src.notifier.telegram_dispatch import dispatch_if_configured
     from src.notifier.telegram_notifier import notify_playback_complete
 
-    notify_playback_complete(
-        bot_token=token,
-        chat_id=chat_id,
+    dispatch_if_configured(
+        notify_playback_complete,
         course_name=course_name,
         week_label=lec.week_label,
         lecture_title=lec.title,
@@ -235,15 +231,11 @@ def _tg_notify_playback_error(course_name: str, lec, failed: bool = True) -> Non
     Args:
         failed: True면 재생 오류, False면 재생 미완료(중단)
     """
-    creds = Config.get_telegram_credentials()
-    if not creds:
-        return
-    token, chat_id = creds
+    from src.notifier.telegram_dispatch import dispatch_if_configured
     from src.notifier.telegram_notifier import notify_playback_error
 
-    notify_playback_error(
-        bot_token=token,
-        chat_id=chat_id,
+    dispatch_if_configured(
+        notify_playback_error,
         course_name=course_name,
         week_label=lec.week_label,
         lecture_title=lec.title,

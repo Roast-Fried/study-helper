@@ -14,7 +14,6 @@ from rich.progress import (
     TextColumn,
 )
 
-from src.config import Config
 from src.logger import get_error_logger
 from src.player.background_player import PlaybackState, play_lecture
 from src.scraper.models import LectureItem
@@ -47,15 +46,16 @@ def _parse_duration(duration_str: str | None) -> float:
 
 def _tg_playback_error(lec: LectureItem, failed: bool = True) -> None:
     """재생 실패/미완료 시 텔레그램 알림을 전송한다 (설정된 경우에만)."""
-    creds = Config.get_telegram_credentials()
-    if not creds:
-        return
-    try:
-        from src.notifier.telegram_notifier import notify_playback_error
+    from src.notifier.telegram_dispatch import dispatch_if_configured
+    from src.notifier.telegram_notifier import notify_playback_error
 
-        notify_playback_error(creds[0], creds[1], "", lec.week_label, lec.title, failed=failed)
-    except Exception:
-        pass
+    dispatch_if_configured(
+        notify_playback_error,
+        course_name="",
+        week_label=lec.week_label,
+        lecture_title=lec.title,
+        failed=failed,
+    )
 
 
 async def run_player(page, lec: LectureItem, debug: bool = False) -> tuple[bool, bool]:

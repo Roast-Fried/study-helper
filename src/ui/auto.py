@@ -758,21 +758,21 @@ def _notify_download_gaps(missing: list[_MissingTuple]) -> None:
     for course_name, week, title, ftype in missing:
         _log.warning("  · [%s] %s %s (누락=%s)", course_name, week, title, ftype)
 
-    creds = Config.get_telegram_credentials()
-    if creds:
-        from src.notifier.telegram_notifier import notify_download_gaps
+    from src.notifier.telegram_dispatch import dispatch_if_configured
+    from src.notifier.telegram_notifier import notify_download_gaps
 
-        notify_download_gaps(creds[0], creds[1], missing)
+    dispatch_if_configured(notify_download_gaps, missing=missing)
 
 
 def _tg_error_notify(course: "Course", lec: "LectureItem", error_msg: str) -> None:
     """자동 모드 처리 오류를 텔레그램으로 알린다."""
-    creds = Config.get_telegram_credentials()
-    if not creds:
-        return
-    try:
-        from src.notifier.telegram_notifier import notify_auto_error
+    from src.notifier.telegram_dispatch import dispatch_if_configured
+    from src.notifier.telegram_notifier import notify_auto_error
 
-        notify_auto_error(creds[0], creds[1], course.long_name, lec.week_label, lec.title, error_msg)
-    except Exception as e:
-        _log.debug("텔레그램 오류 알림 실패: %s", e)
+    dispatch_if_configured(
+        notify_auto_error,
+        course_name=course.long_name,
+        week_label=lec.week_label,
+        lecture_title=lec.title,
+        error_msg=error_msg,
+    )
