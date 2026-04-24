@@ -65,8 +65,9 @@ def resolve_download_path(
 ) -> Path | None:
     """다운로드 경로를 결정하고 경계 검증을 수행한다.
 
-    Returns:
-        mp4 파일의 절대 경로. 경로 검증 실패 시 None.
+    ARCH-002 리팩토링 후에도 유지: 순수 경로 계산 + base 검증은 API 라우트·
+    서비스 레이어 양쪽에서 공통으로 필요하며 1-3줄 래핑이 아니라 검증 책임이
+    있는 도우미 함수이기 때문이다 (TRAVERSAL 방어가 목적).
     """
     from src.downloader.video_downloader import make_filepath
 
@@ -77,87 +78,6 @@ def resolve_download_path(
     if not mp4_path.is_relative_to(base_dir):
         return None
     return mp4_path
-
-
-def convert_to_audio(mp4_path: Path, delete_original: bool = False) -> Path:
-    """mp4를 mp3로 변환한다.
-
-    Args:
-        mp4_path: 원본 mp4 경로
-        delete_original: True면 변환 후 mp4 삭제
-
-    Returns:
-        mp3 파일 경로
-    """
-    from src.converter.audio_converter import convert_to_mp3
-
-    mp3_path = convert_to_mp3(mp4_path)
-    if delete_original:
-        mp4_path.unlink(missing_ok=True)
-    return mp3_path
-
-
-def transcribe_audio(
-    audio_path: Path,
-    model_size: str = "base",
-    language: str = "ko",
-) -> Path:
-    """음성 파일을 텍스트로 변환한다.
-
-    Returns:
-        텍스트 파일 경로
-    """
-    from src.stt.transcriber import transcribe
-
-    return transcribe(audio_path, model_size=model_size, language=language)
-
-
-def summarize_text(
-    txt_path: Path,
-    agent: str = "gemini",
-    api_key: str = "",
-    model: str = "",
-    extra_prompt: str = "",
-) -> Path:
-    """텍스트를 AI로 요약한다.
-
-    Returns:
-        요약 파일 경로
-    """
-    from src.summarizer.summarizer import GEMINI_DEFAULT_MODEL, summarize
-
-    return summarize(
-        txt_path,
-        agent=agent,
-        api_key=api_key,
-        model=model or GEMINI_DEFAULT_MODEL,
-        extra_prompt=extra_prompt,
-    )
-
-
-def send_summary_notification(
-    token: str,
-    chat_id: str,
-    course_name: str,
-    week_label: str,
-    lecture_title: str,
-    summary_path: Path,
-    auto_delete_files: list[Path] | None = None,
-) -> bool:
-    """텔레그램으로 요약 결과를 전송한다."""
-    from src.notifier.telegram_notifier import notify_summary_complete
-
-    summary_text = summary_path.read_text(encoding="utf-8").strip()
-    return notify_summary_complete(
-        bot_token=token,
-        chat_id=chat_id,
-        course_name=course_name,
-        week_label=week_label,
-        lecture_title=lecture_title,
-        summary_text=summary_text,
-        summary_path=summary_path,
-        auto_delete_files=auto_delete_files,
-    )
 
 
 async def run_pipeline(
@@ -216,8 +136,11 @@ async def run_pipeline(
     if audio_only or both:
         await _emit(PipelineStage.CONVERT, 0.0, "mp3 변환 중...")
         try:
-            result.mp3_path = convert_to_audio(mp4_path, delete_original=audio_only)
+            from src.converter.audio_converter import convert_to_mp3
+
+            result.mp3_path = convert_to_mp3(mp4_path)
             if audio_only:
+                mp4_path.unlink(missing_ok=True)
                 result.mp4_path = None
             await _emit(PipelineStage.CONVERT, 1.0, "mp3 변환 완료")
         except Exception as e:
@@ -235,9 +158,11 @@ async def run_pipeline(
         # 덮어쓴다. 여기서 선언하면 finally 진입 시 항상 유효한 값.
         loop = asyncio.get_running_loop()
         try:
+            from src.stt.transcriber import transcribe
+
             result.txt_path = await loop.run_in_executor(
                 None,
-                lambda: transcribe_audio(result.mp3_path, model_size=stt_model, language=stt_language),
+                lambda: transcribe(result.mp3_path, model_size=stt_model, language=stt_language),
             )
             await _emit(PipelineStage.TRANSCRIBE, 1.0, "STT 완료")
         except Exception as e:
@@ -263,14 +188,17 @@ async def run_pipeline(
         else:
             await _emit(PipelineStage.SUMMARIZE, 0.0, "AI 요약 중...")
             try:
+                from src.summarizer.summarizer import GEMINI_DEFAULT_MODEL, summarize
+
                 loop = asyncio.get_running_loop()
+                _summary_model = ai_model or GEMINI_DEFAULT_MODEL
                 result.summary_path = await loop.run_in_executor(
                     None,
-                    lambda: summarize_text(
+                    lambda: summarize(
                         result.txt_path,
                         agent=ai_agent,
                         api_key=ai_api_key,
-                        model=ai_model,
+                        model=_summary_model,
                         extra_prompt=ai_extra_prompt,
                     ),
                 )
@@ -286,12 +214,16 @@ async def run_pipeline(
         if tg_auto_delete:
             files_to_delete = [f for f in [result.mp4_path, result.mp3_path, result.txt_path, result.summary_path] if f]
         try:
-            ok = send_summary_notification(
-                token=tg_token,
+            from src.notifier.telegram_notifier import notify_summary_complete
+
+            summary_text = result.summary_path.read_text(encoding="utf-8").strip()
+            ok = notify_summary_complete(
+                bot_token=tg_token,
                 chat_id=tg_chat_id,
                 course_name=course_name,
                 week_label=week_label,
                 lecture_title=lecture_title,
+                summary_text=summary_text,
                 summary_path=result.summary_path,
                 auto_delete_files=files_to_delete,
             )

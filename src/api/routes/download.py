@@ -11,15 +11,16 @@ from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
 from src.config import Config
+from src.converter.audio_converter import convert_to_mp3
 from src.logger import get_logger
 from src.service.download_pipeline import (
     PipelineProgress,
-    convert_to_audio,
     resolve_download_path,
     run_pipeline,
-    summarize_text,
-    transcribe_audio,
 )
+from src.stt.transcriber import transcribe as _transcribe
+from src.summarizer.summarizer import GEMINI_DEFAULT_MODEL
+from src.summarizer.summarizer import summarize as _summarize
 
 _log = get_logger("api.download")
 
@@ -88,7 +89,9 @@ def _validate_path_in_download_dir(file_path: str) -> Path:
 def convert(body: ConvertRequest):
     """mp4를 mp3로 변환한다."""
     mp4 = _validate_path_in_download_dir(body.mp4_path)
-    mp3_path = convert_to_audio(mp4, delete_original=body.delete_original)
+    mp3_path = convert_to_mp3(mp4)
+    if body.delete_original:
+        mp4.unlink(missing_ok=True)
     return {"mp3_path": str(mp3_path)}
 
 
@@ -102,7 +105,7 @@ async def transcribe(body: TranscribeRequest):
     try:
         txt_path = await loop.run_in_executor(
             None,
-            lambda: transcribe_audio(audio, model_size=body.model_size, language=body.language),
+            lambda: _transcribe(audio, model_size=body.model_size, language=body.language),
         )
         return {"txt_path": str(txt_path)}
     finally:
@@ -122,13 +125,14 @@ async def summarize(body: SummarizeRequest):
         raise HTTPException(status_code=400, detail=f"허용되지 않는 AI 에이전트: {body.agent}")
     txt = _validate_path_in_download_dir(body.txt_path)
     loop = asyncio.get_running_loop()
+    _model = body.model or GEMINI_DEFAULT_MODEL
     summary_path = await loop.run_in_executor(
         None,
-        lambda: summarize_text(
+        lambda: _summarize(
             txt,
             agent=body.agent,
             api_key=body.api_key,
-            model=body.model,
+            model=_model,
             extra_prompt=body.extra_prompt,
         ),
     )
