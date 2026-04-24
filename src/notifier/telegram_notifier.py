@@ -34,33 +34,41 @@ def _is_retriable_status(status_code: int) -> bool:
     return status_code >= 500 or status_code == 429
 
 
-def _send_message(bot_token: str, chat_id: str, text: str) -> bool:
-    """텔레그램 메시지를 전송한다. 응답 body의 ok 필드로 성공 여부를 판정한다.
+def _validate_token(bot_token: str) -> bool:
+    """봇 토큰 형식 검증 (URL 특수문자 방지)."""
+    return bool(_BOT_TOKEN_RE.match(bot_token))
 
-    일시적 실패(5xx, 429, 네트워크)는 최대 3회 재시도. 4xx(잘못된 chat_id 등)는
-    재시도해도 소용없으므로 즉시 False 반환.
+
+def _request_with_retry(
+    endpoint: str,
+    bot_token: str,
+    timeout: float,
+    *,
+    json: dict | None = None,
+    data: dict | None = None,
+    files: dict | None = None,
+) -> bool:
+    """Telegram Bot API 호출을 retry/backoff 공통 로직으로 감싼다.
+
+    ARCH-005: _send_message 와 _send_document 가 동일한 retry 로직을 복제하던 것을 통합.
+    5xx/429 는 재시도, 4xx 는 즉시 실패. 최대 3회 + exponential backoff(1s, 2s).
     """
-    if not _BOT_TOKEN_RE.match(bot_token):
+    if not _validate_token(bot_token):
         return False
-    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    url = f"https://api.telegram.org/bot{bot_token}/{endpoint}"
     last_error: str | None = None
     for attempt in range(_MAX_RETRIES):
         try:
-            resp = requests.post(
-                url,
-                json={"chat_id": chat_id, "text": text},
-                timeout=10,
-            )
+            resp = requests.post(url, json=json, data=data, files=files, timeout=timeout)
             try:
                 if resp.ok:
                     try:
-                        data = resp.json()
+                        return resp.json().get("ok", False)
                     except ValueError:
                         return False
-                    return data.get("ok", False)
                 if not _is_retriable_status(resp.status_code):
                     # 4xx — chat_id 오류 등. 재시도 무의미.
-                    _log.warning("Telegram sendMessage %d — 재시도 안 함", resp.status_code)
+                    _log.warning("Telegram %s %d — 재시도 안 함", endpoint, resp.status_code)
                     return False
                 last_error = f"status={resp.status_code}"
             finally:
@@ -68,16 +76,25 @@ def _send_message(bot_token: str, chat_id: str, text: str) -> bool:
         except requests.exceptions.RequestException as e:
             last_error = type(e).__name__
         if attempt < _MAX_RETRIES - 1:
-            time.sleep(_RETRY_BASE_DELAY * (2 ** attempt))
-    _log.warning("Telegram sendMessage 최종 실패: %s", last_error)
+            time.sleep(_RETRY_BASE_DELAY * (2**attempt))
+    _log.warning("Telegram %s 최종 실패: %s", endpoint, last_error)
     return False
+
+
+def _send_message(bot_token: str, chat_id: str, text: str) -> bool:
+    """텔레그램 메시지를 전송한다."""
+    return _request_with_retry(
+        "sendMessage",
+        bot_token,
+        timeout=10,
+        json={"chat_id": chat_id, "text": text},
+    )
 
 
 def _send_document(bot_token: str, chat_id: str, file_path: Path, caption: str = "") -> bool:
     """텔레그램 파일을 전송한다. 50MB 초과 파일은 전송 시도 없이 False."""
-    if not _BOT_TOKEN_RE.match(bot_token):
+    if not _validate_token(bot_token):
         return False
-    # Telegram Bot API sendDocument 50MB 한도 사전 확인.
     try:
         size = file_path.stat().st_size
     except OSError:
@@ -88,37 +105,18 @@ def _send_document(bot_token: str, chat_id: str, file_path: Path, caption: str =
             size, file_path.name,
         )
         return False
-
-    url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
-    last_error: str | None = None
-    for attempt in range(_MAX_RETRIES):
-        try:
-            with open(file_path, "rb") as f:
-                resp = requests.post(
-                    url,
-                    data={"chat_id": chat_id, "caption": caption},
-                    files={"document": (file_path.name, f)},
-                    timeout=60,
-                )
-            try:
-                if resp.ok:
-                    try:
-                        data = resp.json()
-                    except ValueError:
-                        return False
-                    return data.get("ok", False)
-                if not _is_retriable_status(resp.status_code):
-                    _log.warning("Telegram sendDocument %d — 재시도 안 함", resp.status_code)
-                    return False
-                last_error = f"status={resp.status_code}"
-            finally:
-                resp.close()
-        except requests.exceptions.RequestException as e:
-            last_error = type(e).__name__
-        if attempt < _MAX_RETRIES - 1:
-            time.sleep(_RETRY_BASE_DELAY * (2 ** attempt))
-    _log.warning("Telegram sendDocument 최종 실패: %s", last_error)
-    return False
+    # retry 루프에서 동일 bytes 를 재사용할 수 있도록 미리 로드 (50MB 상한)
+    try:
+        body = file_path.read_bytes()
+    except OSError:
+        return False
+    return _request_with_retry(
+        "sendDocument",
+        bot_token,
+        timeout=60,
+        data={"chat_id": chat_id, "caption": caption},
+        files={"document": (file_path.name, body)},
+    )
 
 
 def _lecture_label(course_name: str, week_label: str, lecture_title: str) -> str:
@@ -313,7 +311,7 @@ def verify_bot(bot_token: str, chat_id: str) -> tuple[bool, str]:
     Returns:
         (성공 여부, 오류 메시지 또는 빈 문자열)
     """
-    if not _BOT_TOKEN_RE.match(bot_token):
+    if not _validate_token(bot_token):
         return False, "봇 토큰 형식이 올바르지 않습니다."
 
     try:
