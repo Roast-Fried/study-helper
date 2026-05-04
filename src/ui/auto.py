@@ -5,6 +5,8 @@
 재생 → 다운로드 → STT → AI 요약 → 텔레그램 알림 처리한다.
 """
 
+from __future__ import annotations
+
 import asyncio
 import sys
 from dataclasses import dataclass
@@ -14,7 +16,8 @@ from typing import TYPE_CHECKING, NamedTuple
 from rich.console import Console
 from rich.prompt import Prompt
 
-from src.config import KST, Config, get_data_path
+# ARCH-010: 재시도 정책은 src.config.RetryPolicy 에서 단일 관리.
+from src.config import KST, Config, RetryPolicy as _RetryPolicy, get_data_path
 from src.downloader.paths import file_present
 from src.downloader.result import (
     REASON_BROWSER_RESTARTED,
@@ -70,8 +73,6 @@ class DownloadStepResult(NamedTuple):
     reason: str | None
     downloadable: bool
 
-# ARCH-010: 재시도 정책은 src.config.RetryPolicy 에서 단일 관리.
-from src.config import RetryPolicy as _RetryPolicy  # noqa: E402
 
 _MAX_PLAY_RETRIES = _RetryPolicy.PLAY
 _BROWSER_RESTART_INTERVAL = _RetryPolicy.BROWSER_RESTART_INTERVAL
@@ -387,8 +388,8 @@ async def run_auto_mode(
             rule = Config.DOWNLOAD_RULE or "both"
 
             all_urls: set[str] = set()
-            full_pending: list[tuple["Course", "LectureItem"]] = []
-            dl_only_pending: list[tuple["Course", "LectureItem"]] = []
+            full_pending: list[tuple[Course, LectureItem]] = []
+            dl_only_pending: list[tuple[Course, LectureItem]] = []
             total_videos = 0
             still_incomplete_urls: set[str] = set()
 
