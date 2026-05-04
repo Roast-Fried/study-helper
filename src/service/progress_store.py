@@ -31,8 +31,10 @@ import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
-from src.config import KST
+from src.config import KST, RetryPolicy
+from src.downloader.result import REASON_PLAY_QUARANTINED
 from src.logger import get_logger
 
 _log = get_logger("service.progress_store")
@@ -50,10 +52,10 @@ class ProgressEntry:
     play_fail_count: int = 0
 
 
-# BUG-5: 누적 재생 실패 임계. 초과하면 영구 격리되어 다음 사이클부터 큐에 들어가지
-# 않는다. 텔레그램 알림은 격리되는 시점에 1 회 발송. 임계는 보수적으로 잡아
-# 일시적 driver crash 등에 의한 false-positive 격리를 방지.
-PLAY_FAIL_QUARANTINE_THRESHOLD = 5
+# BUG-5: 누적 재생 실패 임계는 ARCH-010 (재시도 정책 단일 관리) 에 따라
+# Config.RetryPolicy.PLAY_FAIL_QUARANTINE 로 이관. 본 모듈은 default 인자에서만
+# 참조한다.
+PLAY_FAIL_QUARANTINE_THRESHOLD = RetryPolicy.PLAY_FAIL_QUARANTINE
 
 
 @dataclass
@@ -90,7 +92,7 @@ class ProgressStore:
         if isinstance(raw, dict) and raw.get("version") == 2:
             entries_raw = raw.get("entries", {})
             if isinstance(entries_raw, dict):
-                def _to_int(v) -> int:
+                def _to_int(v: Any) -> int:
                     try:
                         return int(v) if v is not None else 0
                     except (TypeError, ValueError):
@@ -200,22 +202,29 @@ class ProgressStore:
             - 누적 카운터 증가 → 임계 도달 시 mark_unsupported 로 격리
             - 격리되면 True 반환 → 호출자가 텔레그램 알림 1 회 발송 가능
 
-        threshold: 격리 임계 (기본 5). 일시적 driver crash 등으로 인한
-            false-positive 격리를 막기 위해 보수적으로 잡는다.
+        threshold: 격리 임계 (기본은 RetryPolicy.PLAY_FAIL_QUARANTINE). 일시적
+            driver crash 등으로 인한 false-positive 격리를 막기 위해 보수적으로 잡는다.
 
-        Returns:
+        Returns: **transition-edge bool** — 매 호출이 아닌, "격리 transition 이 일어난
+            this 호출에서만" True. 같은 강의에 임계 도달 후 재호출되어도 두 번째부터는
+            False 반환 (이미 downloadable=False) — 호출자의 텔레그램 알림 중복 방지.
+
             True  — 이번 호출로 격리됨 (호출자 알림 트리거)
-            False — 아직 임계 미달 (다음 사이클 재시도 대상)
+            False — 아직 임계 미달 OR 이미 격리됨 (이중 트리거 방지)
+
+        CQS 주의: 카운터 mutation (Command) 과 transition-edge query (Query) 가
+            합쳐진 형태. atomic transition 보장을 위해 의도적으로 합침 — 분리하면
+            동시 호출 race window 가 생긴다 (asyncio 단일 task 라 실제 race 는 없지만
+            계약 측면에서 atomic 가 안전).
         """
         e = self.entries.setdefault(url, ProgressEntry())
         e.play_fail_count += 1
         e.ts = self._now()
 
         if e.play_fail_count >= threshold and e.downloadable is not False:
-            # 격리 — 더 이상 재생 큐에 넣지 않음. mark_unsupported 가 played=True 로
-            # 설정해 is_fully_done=True 가 되어 자동 모드 루프에서 자연스럽게 빠진다.
-            from src.downloader.result import REASON_PLAY_QUARANTINED
-
+            # 격리 — 더 이상 재생 큐에 넣지 않음. mark_unsupported 와 동등한 effect
+            # (played=True, downloadable=False) 로 is_fully_done=True 가 되어
+            # 자동 모드 루프에서 자연스럽게 빠진다.
             e.played = True
             e.downloadable = False
             e.downloaded = False

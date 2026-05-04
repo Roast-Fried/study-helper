@@ -5,7 +5,7 @@ run_download 및 관련 레이어가 성공/실패 상태를 구조화된 형태
 값을 바꿀 때는 로그 파서/복구 스크립트 호환성을 함께 점검할 것.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 # ── 다운로드 실패 사유 ─────────────────────────────────────
@@ -65,11 +65,9 @@ class ExtractionResult:
 
     url: str | None = None
     reason: str | None = None  # 성공 시 None. 실패 시 REASON_URL_EXTRACT_* 중 하나.
-    diagnostics: dict = None  # type: ignore[assignment]
-
-    def __post_init__(self) -> None:
-        if self.diagnostics is None:
-            self.diagnostics = {}
+    # field(default_factory=dict) 로 기본값을 보장 — `dict = None + type: ignore`
+    # 안티패턴 제거 (TYPE-001).
+    diagnostics: dict = field(default_factory=dict)
 
 
 @dataclass

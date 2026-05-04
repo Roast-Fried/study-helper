@@ -84,6 +84,11 @@ class RetryPolicy:
     TELEGRAM_BASE_DELAY = 1.0  # Telegram backoff 기본 (2**attempt 곱)
     BROWSER_RESTART_INTERVAL = 3  # 자동 모드 N 사이클마다 브라우저 재시작
 
+    # BUG-5: 누적 재생 실패 임계 — 재시도 횟수가 아닌 "사이클 누적 실패" 임계.
+    # 의미적으로 PLAY (사이클당 attempt) 와 분리되며, 임계 초과 시 영구 격리.
+    # 보수적으로 잡아 일시적 driver crash 등 false-positive 격리를 방지.
+    PLAY_FAIL_QUARANTINE = 5
+
 
 def _is_docker_with_data_volume() -> bool:
     """Docker 컨테이너 내부이면서 /data 볼륨이 마운트된 경우에만 True.

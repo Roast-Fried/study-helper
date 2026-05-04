@@ -19,6 +19,7 @@ from src.downloader.paths import file_present
 from src.downloader.result import (
     REASON_BROWSER_RESTARTED,
     REASON_PLAY_FAILED,
+    REASON_PLAY_QUARANTINED,
     REASON_STOPPED,
     REASON_UNKNOWN,
     REASON_UNSUPPORTED,
@@ -339,8 +340,14 @@ async def run_auto_mode(
                 if old_ids != new_ids:
                     added = new_ids - old_ids
                     removed = old_ids - new_ids
+                    # SEC-NEW-001: course id set 자체는 PII 가 아니지만 LMS 내부 식별자
+                    # 노출이라 _log.debug 로 격하. 변경 사실(개수)은 _log.info 로 분리.
                     _log.info(
-                        "과목 목록 변경 감지 — 추가:%s 제거:%s", added or "{}", removed or "{}",
+                        "과목 목록 변경 감지 — 추가 %d건 / 제거 %d건",
+                        len(added), len(removed),
+                    )
+                    _log.debug(
+                        "과목 목록 변경 상세 — 추가:%s 제거:%s", added or "{}", removed or "{}",
                     )
                     if added or removed:
                         console.print(
@@ -380,8 +387,8 @@ async def run_auto_mode(
             rule = Config.DOWNLOAD_RULE or "both"
 
             all_urls: set[str] = set()
-            full_pending: list[tuple] = []
-            dl_only_pending: list[tuple] = []
+            full_pending: list[tuple["Course", "LectureItem"]] = []
+            dl_only_pending: list[tuple["Course", "LectureItem"]] = []
             total_videos = 0
             still_incomplete_urls: set[str] = set()
 
@@ -398,8 +405,6 @@ async def run_auto_mode(
                     if lec.needs_watch:
                         # BUG-5 격리: 누적 재생 실패가 임계 초과한 강의는 LMS 가
                         # incomplete 로 보더라도 더 이상 재생 큐에 넣지 않는다.
-                        from src.downloader.result import REASON_PLAY_QUARANTINED
-
                         existing = store.get(lec.full_url)
                         if existing and existing.reason == REASON_PLAY_QUARANTINED:
                             continue

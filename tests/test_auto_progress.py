@@ -71,6 +71,7 @@ def test_mark_played_then_failed(tmp_path: Path):
     store.mark_played(url)
     store.mark_download_failed(url, reason="network")
     entry = store.get(url)
+    assert entry is not None
     assert entry.played is True
     assert entry.downloaded is False
     assert entry.downloadable is True
@@ -82,6 +83,7 @@ def test_mark_unsupported(tmp_path: Path):
     store = _new_store(tmp_path)
     store.mark_unsupported("u2", reason="unsupported")
     entry = store.get("u2")
+    assert entry is not None
     assert entry.downloadable is False
     assert entry.downloaded is False
     assert entry.reason == "unsupported"
@@ -151,6 +153,7 @@ def test_mark_incomplete_resets_played(tmp_path: Path):
     store.entries["u"] = ProgressEntry(played=True, downloaded=True, downloadable=True)
     store.mark_incomplete("u")
     entry = store.get("u")
+    assert entry is not None
     assert entry.played is False
     assert entry.downloaded is None
 
@@ -175,7 +178,9 @@ def test_mark_play_failed_increments_counter(tmp_path: Path):
     for i in range(1, 5):
         quarantined = store.mark_play_failed(url, threshold=5)
         assert quarantined is False
-        assert store.get(url).play_fail_count == i
+        entry = store.get(url)
+        assert entry is not None
+        assert entry.play_fail_count == i
 
 
 def test_mark_play_failed_quarantines_at_threshold(tmp_path: Path):
@@ -190,6 +195,7 @@ def test_mark_play_failed_quarantines_at_threshold(tmp_path: Path):
     quarantined = store.mark_play_failed(url, threshold=5)
     assert quarantined is True
     entry = store.get(url)
+    assert entry is not None
     assert entry.played is True
     assert entry.downloadable is False
     assert entry.downloaded is False
@@ -220,7 +226,9 @@ def test_load_v2_handles_missing_play_fail_count(tmp_path: Path):
     }
     store.path.write_text(json.dumps(legacy_v2), encoding="utf-8")
     store.load()
-    assert store.get("u1").play_fail_count == 0
+    e1 = store.get("u1")
+    assert e1 is not None
+    assert e1.play_fail_count == 0
 
 
 def test_load_v2_handles_corrupted_play_fail_count(tmp_path: Path):
@@ -235,5 +243,7 @@ def test_load_v2_handles_corrupted_play_fail_count(tmp_path: Path):
     }
     store.path.write_text(json.dumps(legacy_v2), encoding="utf-8")
     store.load()
-    assert store.get("u1").play_fail_count == 0
-    assert store.get("u2").play_fail_count == 0
+    e1 = store.get("u1")
+    e2 = store.get("u2")
+    assert e1 is not None and e1.play_fail_count == 0
+    assert e2 is not None and e2.play_fail_count == 0
